@@ -11,7 +11,7 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 # Active jobs tracking
 # Format: { job_id: { 'status': ..., 'progress': ..., 'speed': ..., 'eta': ..., 'size': ..., 'log': [], 'process': ..., 'output_path': ..., 'input_path': ..., 'error': ... } }
 ACTIVE_JOBS: Dict[str, Dict[str, Any]] = {}
-JOBS_LOCK = threading.Lock()
+JOBS_LOCK = threading.RLock()
 _SUPPORTED_HW_ENCODERS: Optional[List[str]] = None
 
 TEMP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "temp"))
@@ -122,18 +122,19 @@ def save_jobs_to_disk() -> None:
 def load_jobs_from_disk() -> None:
     global ACTIVE_JOBS
     if os.path.exists(JOBS_FILE):
-        try:
-            with open(JOBS_FILE, "r", encoding="utf-8") as f:
-                jobs = json.load(f)
-            for jid, job in jobs.items():
-                if job.get("status") in ("running", "pending"):
-                    job["status"] = "failed"
-                    job["error"] = "Server restarted during encoding."
-                    job["finished_time"] = time.time()
-                job["process"] = None
-                ACTIVE_JOBS[jid] = job
-        except Exception as e:
-            print(f"Error loading jobs: {e}", file=sys.stderr)
+        with _JOBS_FILE_LOCK:
+            try:
+                with open(JOBS_FILE, "r", encoding="utf-8") as f:
+                    jobs = json.load(f)
+                for jid, job in jobs.items():
+                    if job.get("status") in ("running", "pending"):
+                        job["status"] = "failed"
+                        job["error"] = "Server restarted during encoding."
+                        job["finished_time"] = time.time()
+                    job["process"] = None
+                    ACTIVE_JOBS[jid] = job
+            except Exception as e:
+                print(f"Error loading jobs: {e}", file=sys.stderr)
 
 
 def is_safe_output_path(path: Optional[str]) -> bool:
@@ -623,7 +624,11 @@ def run_ffmpeg_subprocess(
                             with JOBS_LOCK:
                                 if job_id in ACTIVE_JOBS:
                                     ACTIVE_JOBS[job_id]["log"] = list(stderr_lines)
-                            save_jobs_to_disk()
+                            # NOTE: We intentionally do NOT call save_jobs_to_disk() here.
+                            # Stderr lines arrive at very high frequency (dozens/sec during
+                            # FFmpeg init) and concurrent file writes cause WinError 5/32
+                            # on Windows. The progress-parser loop already persists state
+                            # on every progress packet, which is sufficient.
 
             stderr_thread = threading.Thread(target=read_stderr, daemon=True)
             stderr_thread.start()
