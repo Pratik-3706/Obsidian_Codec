@@ -336,12 +336,6 @@ def run_interactive_wizard():
         
         if mapped_vcodec != vcodec:
             console.print(f"[bold green]GPU Acceleration Active:[/bold green] Auto-switched [cyan]{vcodec}[/cyan] to [cyan]{mapped_vcodec}[/cyan]!")
-            if "nvenc" in mapped_vcodec:
-                cmd.insert(2, "-hwaccel")
-                cmd.insert(3, "cuda")
-            elif "qsv" in mapped_vcodec:
-                cmd.insert(2, "-hwaccel")
-                cmd.insert(3, "qsv")
             
         if acodec == "none":
             cmd += ["-an"]
@@ -558,12 +552,6 @@ def main():
         
         if mapped_vcodec != vcodec:
             console.print(f"[bold green]GPU Acceleration Active:[/bold green] Auto-switched [cyan]{vcodec}[/cyan] to [cyan]{mapped_vcodec}[/cyan]!")
-            if "nvenc" in mapped_vcodec:
-                cmd.insert(2, "-hwaccel")
-                cmd.insert(3, "cuda")
-            elif "qsv" in mapped_vcodec:
-                cmd.insert(2, "-hwaccel")
-                cmd.insert(3, "qsv")
             
         if acodec == "none":
             cmd += ["-an"]

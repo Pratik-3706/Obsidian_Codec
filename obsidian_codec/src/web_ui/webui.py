@@ -256,12 +256,8 @@ def api_convert():
                 # Map standard codec to hw encoder
                 if hw_type == "nvenc":
                     mapped_vcodec = "h264_nvenc" if video_codec == "libx264" else "hevc_nvenc" if video_codec == "libx265" else video_codec
-                    cmd.insert(2, "-hwaccel")
-                    cmd.insert(3, "cuda")
                 elif hw_type == "qsv":
                     mapped_vcodec = "h264_qsv" if video_codec == "libx264" else "hevc_qsv" if video_codec == "libx265" else video_codec
-                    cmd.insert(2, "-hwaccel")
-                    cmd.insert(3, "qsv")
                 elif hw_type == "amf":
                     mapped_vcodec = "h264_amf" if video_codec == "libx264" else "hevc_amf" if video_codec == "libx265" else video_codec
                 elif hw_type == "mf":
