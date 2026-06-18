@@ -743,7 +743,7 @@ def generate_thumbnail_grid(input_path: str, output_path: str, rows: int = 4, co
 
 def get_detected_gpus() -> List[str]:
     """Returns a list of physical GPU names detected on the system."""
-    gpus = []
+    gpus: List[str] = []
     if sys.platform == "win32":
         try:
             startupinfo = subprocess.STARTUPINFO()
