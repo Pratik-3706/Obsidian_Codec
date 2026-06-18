@@ -303,7 +303,7 @@ document.addEventListener('DOMContentLoaded', () => {
     analyzeFile(filepath);
   });
 
-  async function analyzeFile(filepath) {
+  async function analyzeFile(filepath, isFromBatchUpload = false) {
     btnAnalyzeLocal.disabled = true;
     const span = btnAnalyzeLocal.querySelector('span');
     if (span) span.textContent = "Analyzing...";
@@ -348,14 +348,20 @@ document.addEventListener('DOMContentLoaded', () => {
         
         renderBatchListDisplay();
       } else {
-        batchQueue = [];
-        isBatchMode = false;
-        const existing = document.getElementById('batch-list-box');
-        if (existing) existing.remove();
+        if (!isFromBatchUpload) {
+          batchQueue = [];
+          isBatchMode = false;
+          const existing = document.getElementById('batch-list-box');
+          if (existing) existing.remove();
+        }
         
         sourceFilePath = filepath;
         probedData = data;
         displayMetadata(data);
+
+        if (isFromBatchUpload) {
+          renderBatchListDisplay();
+        }
       }
       
     } catch (err) {
@@ -440,7 +446,7 @@ document.addEventListener('DOMContentLoaded', () => {
       uploadProgressContainer.classList.add('hidden');
       batchQueue = [...uploadedPaths];
       isBatchMode = true;
-      analyzeFile(batchQueue[0]);
+      analyzeFile(batchQueue[0], true);
       return;
     }
     
