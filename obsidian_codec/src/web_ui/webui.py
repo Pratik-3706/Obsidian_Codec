@@ -26,7 +26,8 @@ from obsidian_codec.src.utils.ffmpeg_utils import (
     generate_thumbnail_grid,
     ensure_temp_dir,
     get_supported_hw_encoders,
-    get_detected_gpus
+    get_detected_gpus,
+    validate_transcoding_combination
 )
 
 app = Flask(
@@ -184,10 +185,19 @@ def api_convert():
     meta = probe_file(input_path)
     duration = meta.get("duration", 0)
     
-    job_id = str(uuid.uuid4())
-    
     input_dir = os.path.dirname(input_path)
     base_name, ext = os.path.splitext(os.path.basename(input_path))
+
+    if operation == "convert":
+        video_codec = data.get("video_codec", "libx264")
+        audio_codec = data.get("audio_codec", "aac")
+        out_format = data.get("format", ext.lstrip(".") if ext else "mp4")
+        audio_track = data.get("audio_track")
+        is_valid, err_msg = validate_transcoding_combination(out_format, video_codec, audio_codec, meta, audio_track)
+        if not is_valid:
+            return jsonify({"error": err_msg}), 400
+
+    job_id = str(uuid.uuid4())
     
     custom_output = data.get("output_path")
     
@@ -409,7 +419,12 @@ def api_convert():
             else:
                 friendly_encoder = f"CPU Software ({mapped_vcodec})"
 
+            if video_codec != "copy" and any(x in mapped_vcodec for x in ["hevc", "h265", "x265"]):
+                if output_path.lower().endswith((".mp4", ".m4v", ".mov")):
+                    cmd += ["-tag:v", "hvc1"]
             cmd += ["-map_metadata", "0"]
+            if output_path.lower().endswith(".m4v"):
+                cmd += ["-f", "mp4"]
             cmd.append(output_path)
             
         elif operation == "extract_audio":
@@ -431,6 +446,8 @@ def api_convert():
             cmd = ["ffmpeg", "-y", "-i", input_path, "-an"]
             video_codec = data.get("video_codec", "copy")
             cmd += ["-c:v", video_codec]
+            if output_path.lower().endswith(".m4v"):
+                cmd += ["-f", "mp4"]
             cmd.append(output_path)
             friendly_encoder = f"Video Extractor ({video_codec})"
             
@@ -556,6 +573,8 @@ def api_convert():
             else: # add
                 cmd += ["-map", "0:v:0", "-map", "0:a?", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac"]
                 
+            if output_path.lower().endswith(".m4v"):
+                cmd += ["-f", "mp4"]
             cmd.append(output_path)
             friendly_encoder = f"Audio Muxer ({embed_mode.upper()})"
             
@@ -568,11 +587,16 @@ def api_convert():
             if sub_mode == "hard":
                 cmd = ["ffmpeg", "-y", "-i", input_path]
                 escaped_sub = sub_file.replace("\\", "/").replace(":", "\\:")
-                cmd += ["-vf", f"subtitles='{escaped_sub}'", "-c:a", "copy", output_path]
+                cmd += ["-vf", f"subtitles='{escaped_sub}'", "-c:a", "copy"]
+                if output_path.lower().endswith(".m4v"):
+                    cmd += ["-f", "mp4"]
+                cmd.append(output_path)
             else: # soft
                 cmd = ["ffmpeg", "-y", "-i", input_path, "-i", sub_file]
                 sub_codec = "mov_text" if output_path.lower().endswith((".mp4", ".m4v", ".mov")) else "srt"
                 cmd += ["-map", "0:v:0", "-map", "0:a?", "-map", "1:s:0", "-c:v", "copy", "-c:a", "copy", "-c:s", sub_codec]
+                if output_path.lower().endswith(".m4v"):
+                    cmd += ["-f", "mp4"]
                 cmd.append(output_path)
             friendly_encoder = f"Subtitle Muxer ({sub_mode.upper()})"
                 

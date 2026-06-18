@@ -21,7 +21,8 @@ from obsidian_codec.src.utils.ffmpeg_utils import (
     ACTIVE_JOBS,
     JOBS_LOCK,
     generate_thumbnail_grid,
-    get_supported_hw_encoders
+    get_supported_hw_encoders,
+    validate_transcoding_combination
 )
 
 # Enforce UTF-8 stdout/stderr on Windows to render unicode banners
@@ -329,6 +330,13 @@ def run_interactive_wizard():
         
         acodec = Prompt.ask("Select audio codec", choices=["aac", "libmp3lame", "libopus", "flac", "copy", "none"], default="aac")
         
+        # Validate container-codec combination compatibility
+        is_valid, err_msg = validate_transcoding_combination(container, vcodec, acodec, info, 0)
+        if not is_valid:
+            console.print(f"\n[bold red]Configuration Error:[/bold red] {err_msg}", style="red")
+            console.print("[bold yellow]Please restart the wizard and select compatible formats.[/bold yellow]\n")
+            return
+
         # Build command
         cmd = ["ffmpeg", "-y", "-i", filepath]
         mapped_vcodec, v_args = map_codec_and_build_args(vcodec, preset, crf, resolution)
@@ -345,6 +353,11 @@ def run_interactive_wizard():
         cmd += ["-map_metadata", "0"]
         
         out_path = os.path.join(input_dir, f"{base_name}_obsidian.{container}")
+        if any(x in mapped_vcodec for x in ["hevc", "h265", "x265"]):
+            if out_path.lower().endswith((".mp4", ".m4v", ".mov")):
+                cmd += ["-tag:v", "hvc1"]
+        if out_path.lower().endswith(".m4v"):
+            cmd += ["-f", "mp4"]
         cmd.append(out_path)
         
         run_ffmpeg_with_cli_progress(cmd, info['duration'], out_path)
@@ -362,7 +375,10 @@ def run_interactive_wizard():
     elif op_choice == "3": # Extract Video Only
         vcodec = Prompt.ask("Select video codec", choices=["copy", "libx264", "libx265"], default="copy")
         out_path = os.path.join(input_dir, f"{base_name}_video{ext}")
-        cmd = ["ffmpeg", "-y", "-i", filepath, "-an", "-c:v", vcodec, out_path]
+        cmd = ["ffmpeg", "-y", "-i", filepath, "-an", "-c:v", vcodec]
+        if out_path.lower().endswith(".m4v"):
+            cmd += ["-f", "mp4"]
+        cmd.append(out_path)
         run_ffmpeg_with_cli_progress(cmd, info['duration'], out_path)
         
     elif op_choice == "4": # Extract Subtitles
@@ -443,6 +459,8 @@ def run_interactive_wizard():
                 cmd += ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac"]
             else:
                 cmd += ["-map", "0:v:0", "-map", "0:a?", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac"]
+            if out_path.lower().endswith(".m4v"):
+                cmd += ["-f", "mp4"]
             cmd.append(out_path)
             run_ffmpeg_with_cli_progress(cmd, info['duration'], out_path)
             
@@ -460,7 +478,10 @@ def run_interactive_wizard():
             else:
                 out_path = os.path.join(input_dir, f"{base_name}_burned{ext}")
                 escaped_sub = sub_path.replace("\\", "/").replace(":", "\\:")
-                cmd = ["ffmpeg", "-y", "-i", filepath, "-vf", f"subtitles='{escaped_sub}'", "-c:a", "copy", out_path]
+                cmd = ["ffmpeg", "-y", "-i", filepath, "-vf", f"subtitles='{escaped_sub}'", "-c:a", "copy"]
+                if out_path.lower().endswith(".m4v"):
+                    cmd += ["-f", "mp4"]
+                cmd.append(out_path)
                 run_ffmpeg_with_cli_progress(cmd, info['duration'], out_path)
 
 def main():
@@ -525,7 +546,10 @@ def main():
         codec = args.vcodec or "copy"
         if not output_path:
             output_path = os.path.join(input_dir, f"{base_name}_video{ext}")
-        cmd = ["ffmpeg", "-y", "-i", args.input, "-an", "-c:v", codec, output_path]
+        cmd = ["ffmpeg", "-y", "-i", args.input, "-an", "-c:v", codec]
+        if output_path.lower().endswith(".m4v"):
+            cmd += ["-f", "mp4"]
+        cmd.append(output_path)
         run_ffmpeg_with_cli_progress(cmd, duration, output_path)
         
     elif args.extract_subs:
@@ -542,6 +566,13 @@ def main():
         
         if not output_path:
             output_path = os.path.join(input_dir, f"{base_name}_obsidian{ext}")
+            
+        # Validate container-codec combination compatibility
+        out_container = os.path.splitext(output_path)[1].lstrip(".") or "mp4"
+        is_valid, err_msg = validate_transcoding_combination(out_container, vcodec, acodec, meta, args.audio_track)
+        if not is_valid:
+            console.print(f"[bold red]Validation Error:[/bold red] {err_msg}", style="red")
+            sys.exit(1)
             
         cmd = ["ffmpeg", "-y", "-i", args.input]
         crf_val = args.crf or "23"
@@ -589,7 +620,13 @@ def main():
             sub_codec = "mov_text" if output_path.lower().endswith((".mp4", ".m4v", ".mov")) else "copy"
             cmd += ["-map", "0:s?", "-c:s", sub_codec]
             
-        cmd += ["-map_metadata", "0", output_path]
+        if any(x in mapped_vcodec for x in ["hevc", "h265", "x265"]):
+            if output_path.lower().endswith((".mp4", ".m4v", ".mov")):
+                cmd += ["-tag:v", "hvc1"]
+        cmd += ["-map_metadata", "0"]
+        if output_path.lower().endswith(".m4v"):
+            cmd += ["-f", "mp4"]
+        cmd.append(output_path)
         run_ffmpeg_with_cli_progress(cmd, duration, output_path)
 
 if __name__ == "__main__":

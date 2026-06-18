@@ -290,7 +290,7 @@ def run_ffmpeg_subprocess(job_id, cmd, total_duration, output_path, input_path):
             ACTIVE_JOBS[job_id]['process'] = proc
 
         # Thread to read stderr logs so they don't block and we can show them to user
-        stderr_lines = []
+        stderr_lines = ["Command: " + " ".join(cmd)]
         def read_stderr():
             for line in proc.stderr:
                 stripped = line.strip()
@@ -554,4 +554,89 @@ def get_detected_gpus():
             pass
             
     return gpus
+
+
+def validate_transcoding_combination(container, vcodec, acodec, meta=None, audio_track_idx=None):
+    """
+    Checks if the selected video and audio codecs are compatible with the target container format.
+    Returns (is_valid, error_message).
+    """
+    compat_matrix = {
+        "webm": {
+            "video": ["libvpx", "libvpx-vp9", "libaom-av1", "copy"],
+            "audio": ["libvorbis", "libopus", "copy", "none"],
+            "notes": "WebM container only supports VP8, VP9, and AV1 video, and Vorbis and Opus audio."
+        },
+        "ogg": {
+            "video": ["none", "copy"],
+            "audio": ["libvorbis", "libopus", "flac", "copy", "none"],
+            "notes": "Ogg container only supports Vorbis, Opus, and FLAC audio. Video stream encoding to Ogg is not supported."
+        },
+        "flv": {
+            "video": ["libx264", "mpeg4", "copy"],
+            "audio": ["aac", "libmp3lame", "pcm_s16le", "copy", "none"],
+            "notes": "FLV container does not support modern codecs like HEVC (libx265), VP9, AV1, or audio codecs like Opus, FLAC, AC3, ALAC, or Vorbis."
+        },
+        "ts": {
+            "video": ["libx264", "libx265", "mpeg4", "copy"],
+            "audio": ["aac", "libmp3lame", "ac3", "copy", "none"],
+            "notes": "MPEG-TS container does not support VP9, AV1, VP8, ProRes video, or Opus, FLAC, Vorbis, ALAC audio."
+        },
+        "avi": {
+            "video": ["libx264", "mpeg4", "libxvid", "copy"],
+            "audio": ["libmp3lame", "ac3", "pcm_s16le", "copy", "none"],
+            "notes": "AVI container does not support HEVC (libx265), VP9, AV1, ProRes, VP8 video, or AAC, Opus, FLAC, Vorbis, ALAC audio."
+        },
+        "mov": {
+            "video": ["libx264", "libx265", "prores", "mpeg4", "libxvid", "libvpx-vp9", "libaom-av1", "copy"],
+            "audio": ["aac", "libmp3lame", "alac", "pcm_s16le", "ac3", "flac", "copy", "none"],
+            "notes": "QuickTime MOV supports H.264, HEVC, ProRes, MPEG-4, VP9, AV1 video, and AAC, MP3, ALAC, PCM, AC3, FLAC audio. VP8 video and Opus/Vorbis audio are not supported."
+        },
+        "mp4": {
+            "video": ["libx264", "libx265", "libvpx-vp9", "libaom-av1", "mpeg4", "libxvid", "copy"],
+            "audio": ["aac", "libmp3lame", "libopus", "flac", "ac3", "alac", "libvorbis", "pcm_s16le", "copy", "none"],
+            "notes": "MP4 container does not support ProRes or VP8 video."
+        },
+        "m4v": {
+            "video": ["libx264", "libx265", "libvpx-vp9", "libaom-av1", "mpeg4", "libxvid", "copy"],
+            "audio": ["aac", "libmp3lame", "libopus", "flac", "ac3", "alac", "libvorbis", "pcm_s16le", "copy", "none"],
+            "notes": "M4V container does not support ProRes or VP8 video."
+        }
+    }
+
+    container_lower = container.lower().lstrip('.')
+    rules = compat_matrix.get(container_lower)
+    if not rules:
+        return True, ""
+
+    check_v = vcodec
+    if vcodec == "copy" and meta and meta.get("video_streams"):
+        src_v = meta["video_streams"][0].get("codec_name")
+        v_map = {"h264": "libx264", "hevc": "libx265", "vp9": "libvpx-vp9", "av1": "libaom-av1", "prores": "prores", "mpeg4": "mpeg4", "vp8": "libvpx", "xvid": "libxvid"}
+        check_v = v_map.get(src_v, src_v)
+    
+    check_a = acodec
+    if acodec == "copy" and meta and meta.get("audio_streams"):
+        track_idx = int(audio_track_idx) if audio_track_idx is not None and str(audio_track_idx).isdigit() else 0
+        if track_idx < len(meta["audio_streams"]):
+            src_a = meta["audio_streams"][track_idx].get("codec_name")
+            a_map = {"mp3": "libmp3lame", "vorbis": "libvorbis", "opus": "libopus"}
+            check_a = a_map.get(src_a, src_a)
+
+    is_v_compat = not rules.get("video") or check_v in rules["video"]
+    is_a_compat = not rules.get("audio") or check_a in rules["audio"]
+
+    if not is_v_compat or not is_a_compat:
+        err_msg = ""
+        if not is_v_compat and not is_a_compat:
+            err_msg = f"Incompatible combination: Both Video Codec ({check_v}) and Audio Codec ({check_a}) are incompatible with the {container_lower.upper()} container. "
+        elif not is_v_compat:
+            err_msg = f"Incompatible combination: Video Codec ({check_v}) is incompatible with the {container_lower.upper()} container. "
+        else:
+            err_msg = f"Incompatible combination: Audio Codec ({check_a}) is incompatible with the {container_lower.upper()} container. "
+        err_msg += rules["notes"]
+        return False, err_msg
+
+    return True, ""
+
 

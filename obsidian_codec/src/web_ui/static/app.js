@@ -397,6 +397,7 @@ document.addEventListener('DOMContentLoaded', () => {
           document.querySelectorAll('input[name="audio-stream-radio"]').forEach(rad => {
             rad.closest('.stream-item').classList.toggle('active', rad.checked);
           });
+          checkTranscodingCompatibility();
         });
         audioStreamsList.appendChild(div);
       });
@@ -451,6 +452,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('analysis-placeholder').classList.add('hidden');
     document.getElementById('analysis-results').classList.remove('hidden');
     
+    checkTranscodingCompatibility();
     settingsPanel.scrollIntoView({ behavior: 'smooth' });
   }
 
@@ -469,6 +471,138 @@ document.addEventListener('DOMContentLoaded', () => {
   convCrf.addEventListener('input', () => {
     crfValue.textContent = convCrf.value;
   });
+
+  // --- Transcoding Compatibility Verification ---
+  const COMPATIBILITY_MATRIX = {
+    webm: {
+      video: ['libvpx', 'libvpx-vp9', 'libaom-av1', 'copy'],
+      audio: ['libvorbis', 'libopus', 'copy', 'none'],
+      notes: "WebM container only supports VP8, VP9, and AV1 video codecs, and Vorbis and Opus audio codecs."
+    },
+    ogg: {
+      video: ['none', 'copy'],
+      audio: ['libvorbis', 'libopus', 'flac', 'copy', 'none'],
+      notes: "Ogg container only supports Vorbis, Opus, and FLAC audio. Video stream encoding to Ogg is not supported."
+    },
+    flv: {
+      video: ['libx264', 'mpeg4', 'copy'],
+      audio: ['aac', 'libmp3lame', 'pcm_s16le', 'copy', 'none'],
+      notes: "FLV container does not support modern codecs like HEVC (libx265), VP9, AV1, or audio codecs like Opus, FLAC, AC3, ALAC, or Vorbis."
+    },
+    ts: {
+      video: ['libx264', 'libx265', 'mpeg4', 'copy'],
+      audio: ['aac', 'libmp3lame', 'ac3', 'copy', 'none'],
+      notes: "MPEG-TS container does not support VP9, AV1, VP8, ProRes video, or Opus, FLAC, Vorbis, ALAC audio."
+    },
+    avi: {
+      video: ['libx264', 'mpeg4', 'libxvid', 'copy'],
+      audio: ['libmp3lame', 'ac3', 'pcm_s16le', 'copy', 'none'],
+      notes: "AVI container does not support HEVC (libx265), VP9, AV1, ProRes, VP8 video, or AAC, Opus, FLAC, Vorbis, ALAC audio."
+    },
+    mov: {
+      video: ['libx264', 'libx265', 'prores', 'mpeg4', 'libxvid', 'libvpx-vp9', 'libaom-av1', 'copy'],
+      audio: ['aac', 'libmp3lame', 'alac', 'pcm_s16le', 'ac3', 'flac', 'copy', 'none'],
+      notes: "QuickTime MOV supports H.264, HEVC, ProRes, MPEG-4, VP9, AV1 video, and AAC, MP3, ALAC, PCM, AC3, FLAC audio. VP8 video and Opus/Vorbis audio are not supported."
+    },
+    mp4: {
+      video: ['libx264', 'libx265', 'libvpx-vp9', 'libaom-av1', 'mpeg4', 'libxvid', 'copy'],
+      audio: ['aac', 'libmp3lame', 'libopus', 'flac', 'ac3', 'alac', 'libvorbis', 'pcm_s16le', 'copy', 'none'],
+      notes: "MP4 container does not support ProRes or VP8 video."
+    },
+    m4v: {
+      video: ['libx264', 'libx265', 'libvpx-vp9', 'libaom-av1', 'mpeg4', 'libxvid', 'copy'],
+      audio: ['aac', 'libmp3lame', 'libopus', 'flac', 'ac3', 'alac', 'libvorbis', 'pcm_s16le', 'copy', 'none'],
+      notes: "M4V container does not support ProRes or VP8 video."
+    }
+  };
+
+  function mapSourceCodecToOption(codecName, type) {
+    if (type === 'video') {
+      if (codecName === 'h264') return 'libx264';
+      if (codecName === 'hevc') return 'libx265';
+      if (codecName === 'vp9') return 'libvpx-vp9';
+      if (codecName === 'av1') return 'libaom-av1';
+      if (codecName === 'prores') return 'prores';
+      if (codecName === 'mpeg4') return 'mpeg4';
+      if (codecName === 'vp8') return 'libvpx';
+      if (codecName === 'xvid') return 'libxvid';
+      return codecName;
+    } else {
+      if (codecName === 'mp3') return 'libmp3lame';
+      if (codecName === 'vorbis') return 'libvorbis';
+      if (codecName === 'opus') return 'libopus';
+      return codecName;
+    }
+  }
+
+  function checkTranscodingCompatibility() {
+    const format = document.getElementById('conv-format').value;
+    let videoCodec = document.getElementById('conv-vcodec').value;
+    let audioCodec = document.getElementById('conv-acodec').value;
+
+    const warningBanner = document.getElementById('conv-compat-warning');
+    const warningText = document.getElementById('conv-compat-warning-text');
+
+    if (!warningBanner || !warningText) return;
+
+    if (videoCodec === 'copy' && probedData && probedData.video_streams && probedData.video_streams.length > 0) {
+      videoCodec = mapSourceCodecToOption(probedData.video_streams[0].codec_name, 'video');
+    }
+    if (audioCodec === 'copy' && probedData && probedData.audio_streams && probedData.audio_streams.length > 0) {
+      const checkedAudio = document.querySelector('input[name="audio-stream-radio"]:checked');
+      const audioStream = checkedAudio 
+        ? probedData.audio_streams.find(s => s.index == checkedAudio.value) 
+        : probedData.audio_streams[0];
+      if (audioStream) {
+        audioCodec = mapSourceCodecToOption(audioStream.codec_name, 'audio');
+      }
+    }
+
+    const rules = COMPATIBILITY_MATRIX[format];
+    if (!rules) {
+      warningBanner.classList.add('hidden');
+      btnStartProcess.disabled = false;
+      btnStartProcess.style.opacity = '';
+      btnStartProcess.style.cursor = '';
+      return;
+    }
+
+    let isVideoIncompatible = false;
+    let isAudioIncompatible = false;
+
+    if (rules.video && !rules.video.includes(videoCodec)) {
+      isVideoIncompatible = true;
+    }
+    if (rules.audio && !rules.audio.includes(audioCodec)) {
+      isAudioIncompatible = true;
+    }
+
+    if (isVideoIncompatible || isAudioIncompatible) {
+      let msg = "";
+      if (isVideoIncompatible && isAudioIncompatible) {
+        msg = `Incompatible combination: Video Codec (${videoCodec}) and Audio Codec (${audioCodec}) are incompatible with the ${format.toUpperCase()} container. `;
+      } else if (isVideoIncompatible) {
+        msg = `Incompatible combination: Video Codec (${videoCodec}) is incompatible with the ${format.toUpperCase()} container. `;
+      } else {
+        msg = `Incompatible combination: Audio Codec (${audioCodec}) is incompatible with the ${format.toUpperCase()} container. `;
+      }
+      msg += rules.notes;
+      warningText.textContent = msg;
+      warningBanner.classList.remove('hidden');
+      btnStartProcess.disabled = true;
+      btnStartProcess.style.opacity = '0.5';
+      btnStartProcess.style.cursor = 'not-allowed';
+    } else {
+      warningBanner.classList.add('hidden');
+      btnStartProcess.disabled = false;
+      btnStartProcess.style.opacity = '';
+      btnStartProcess.style.cursor = '';
+    }
+  }
+
+  document.getElementById('conv-format').addEventListener('change', checkTranscodingCompatibility);
+  document.getElementById('conv-vcodec').addEventListener('change', checkTranscodingCompatibility);
+  document.getElementById('conv-acodec').addEventListener('change', checkTranscodingCompatibility);
 
   // Frames Mode fields visibility
   framesMode.addEventListener('change', () => {
