@@ -1,0 +1,67 @@
+MIT License
+
+Copyright (c) 2026 Obsidian Codec Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+EXCEPTIONS & PROPRIETARY ASSETS
+================================================================================
+
+The image assets located at:
+  obsidian_codec/src/web_ui/assets/cheap_logo.png
+  obsidian_codec/src/web_ui/assets/loading_animation/last_layer.png
+  obsidian_codec/src/web_ui/assets/loading_animation/middle_layer.png
+  obsidian_codec/src/web_ui/assets/loading_animation/top_layer.png
+
+are the proprietary property of the Copyright holder. All rights are reserved for
+these assets. The MIT License granted above does NOT apply to these images.
+You may not reuse, redistribute, modify, or sublicense these assets without
+express written permission from the copyright owner.
+
+================================================================================
+THIRD-PARTY CREDITS & ATTRIBUTIONS
+================================================================================
+
+This software utilizes several third-party libraries and tools, credited below:
+
+1. FFmpeg
+   - Website: https://ffmpeg.org/
+   - License: LGPL version 2.1 or later (or GPL version 2 or later, depending on configuration).
+   - Description: A complete, cross-platform solution to record, convert, and stream audio and video. FFmpeg builds provided by gyan.dev.
+
+2. Python
+   - Website: https://www.python.org/
+   - License: PSF License Agreement.
+   - Description: The underlying programming language powering this application's backend and command-line interfaces.
+
+3. Flask
+   - Website: https://palletsprojects.com/p/flask/
+   - License: BSD 3-Clause License.
+   - Description: Lightweight WSGI web application framework used to build and serve the Web UI dashboard.
+
+4. Rich
+   - Website: https://github.com/Textualize/rich
+   - License: MIT License.
+   - Description: Python library for writing rich text (with color and style) to the terminal, and for displaying beautiful tables, progress bars, and banners in the CLI.
+
+5. Psutil
+   - Website: https://github.com/giampaolo/psutil
+   - License: BSD 3-Clause License.
+   - Description: Cross-platform library for retrieving information on running processes and system utilization. Used for secure conversion process cancellation and subprocess tree management.

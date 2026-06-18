@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Obsidian Codec — Next-Gen Media Suite</title>
+  <!-- Google Fonts Outfit & JetBrains Mono -->
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <!-- Ambient background moving glows -->
+  <div class="blob blob-purple"></div>
+  <div class="blob blob-cyan"></div>
+  <div class="blob blob-blue"></div>
+
+  <div class="app-layout">
+    <!-- Navbar / Header -->
+    <header class="navbar">
+      <div class="brand">
+        <div class="logo-container">
+          <img src="/assets/cheap_logo.png" alt="Obsidian Codec Logo" class="logo-img">
+        </div>
+        <div class="brand-info">
+          <h1>OBSIDIAN <span class="accent-text">CODEC</span></h1>
+          <span class="tagline">Next-Generation Video & Media Processing Suite</span>
+        </div>
+      </div>
+      <div class="navbar-actions">
+        <div class="status-indicator">
+          <span class="pulse-dot"></span>
+          <span class="status-label">Pipeline Ready</span>
+        </div>
+        <button class="quit-btn" id="btn-quit" title="Shutdown engine and close application">
+          <svg class="quit-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+            <line x1="12" y1="2" x2="12" y2="12"></line>
+          </svg>
+          <span>QUIT</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace Grid -->
+    <div class="workspace">
+      
+      <!-- Left Panel: Source File & Stream Analytics -->
+      <div class="col-left">
+        <!-- 1. Source Select Card -->
+        <section class="card glass-card">
+          <div class="card-header">
+            <div class="header-icon cyan-shadow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+                <polyline points="10 9 9 9 8 9"/>
+              </svg>
+            </div>
+            <h2>Source Media Input</h2>
+          </div>
+          
+          <div class="card-body">
+            <div class="mode-tabs">
+              <button class="mode-tab active" id="btn-local-mode">Local Path</button>
+              <button class="mode-tab" id="btn-upload-mode">Web Upload</button>
+            </div>
+
+            <!-- Local Path View -->
+            <div id="local-path-container" class="input-view active">
+              <div class="fancy-input-group">
+                <label for="local-path-input">System Absolute File Path</label>
+                <div class="path-bar">
+                  <input type="text" id="local-path-input" placeholder="C:\Users\Username\Videos\input.mp4" autocomplete="off">
+                  <button class="glow-btn" id="btn-analyze-local">
+                    <span>Analyze</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Upload View -->
+            <div id="web-upload-container" class="input-view">
+              <div class="dropzone" id="drop-zone">
+                <input type="file" id="file-input" class="hidden-input" multiple>
+                <div class="dropzone-hud">
+                  <svg class="hud-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                  </svg>
+                  <p class="dropzone-p">Drag & Drop file or <span class="highlight">Browse</span></p>
+                  <span class="sub-p">Secure 5MB sequential chunked uploader</span>
+                </div>
+              </div>
+              
+              <!-- Upload Progress -->
+              <div id="upload-progress-container" class="upload-hud hidden">
+                <div class="upload-hud-details">
+                  <span id="upload-filename">video.mp4</span>
+                  <span id="upload-percentage">0%</span>
+                </div>
+                <div class="hud-bar-wrap">
+                  <div class="hud-bar" id="upload-progress-fill"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 2. Stream Prober Analytics -->
+        <section class="card glass-card" id="analysis-panel">
+          <div class="card-header">
+            <div class="header-icon purple-shadow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+            </div>
+            <h2>Stream Prober Specs</h2>
+          </div>
+          
+          <!-- Diagnostics Placeholder (Initial Screen Fill) -->
+          <div class="card-body" id="analysis-placeholder">
+            <div class="offline-diagnostics">
+              <div class="radar-pulse">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 24px; height: 24px; color: var(--neon-purple);">
+                  <line x1="22" y1="12" x2="2" y2="12"/>
+                  <path d="M5.45 5.11L12 12v6M18.55 5.11L12 12"/>
+                </svg>
+              </div>
+              <p>Stream Prober Diagnostics Offline</p>
+              <span>Provide a file path or drop a file above to activate media stream mapping</span>
+            </div>
+          </div>
+
+          <!-- Active Results -->
+          <div class="card-body hidden" id="analysis-results">
+            <!-- Spec Cards -->
+            <div class="analyser-hud">
+              <div class="analyser-hud-item">
+                <span class="hud-lbl">Duration</span>
+                <span class="hud-val" id="spec-duration">00:00:00</span>
+              </div>
+              <div class="analyser-hud-item">
+                <span class="hud-lbl">File Size</span>
+                <span class="hud-val" id="spec-size">0.00 MB</span>
+              </div>
+              <div class="analyser-hud-item">
+                <span class="hud-lbl">Wrapper</span>
+                <span class="hud-val" id="spec-container">N/A</span>
+              </div>
+            </div>
+
+            <!-- Toggles and list -->
+            <div class="specs-scroller">
+              <!-- Video Track -->
+              <div class="track-section">
+                <div class="section-title">Video Core Stream</div>
+                <div id="video-streams-list" class="track-list"></div>
+              </div>
+
+              <!-- Audio Track -->
+              <div class="track-section">
+                <div class="section-title">Audio Mappings</div>
+                <div id="audio-streams-list" class="track-list"></div>
+                
+                <div class="channel-override-box hidden" id="audio-channels-group">
+                  <label for="audio-channels-select">Mux Audio Layout</label>
+                  <select id="audio-channels-select" class="form-select">
+                    <option value="">Source Standard Channels</option>
+                    <option value="1">Mono (1.0)</option>
+                    <option value="2">Stereo (2.0 Layout)</option>
+                    <option value="6">Surround Sound (5.1 Mux)</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Subtitle Track -->
+              <div class="track-section">
+                <div class="section-title">Subtitles Streams</div>
+                <div id="subtitle-streams-list" class="track-list"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Right Panel: Configurations & Operation Toggles -->
+      <div class="col-right">
+        <section class="card glass-card" id="settings-panel">
+          <div class="card-header">
+            <div class="header-icon blue-shadow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+              </svg>
+            </div>
+            <h2>Processing Engine Presets</h2>
+          </div>
+
+          <!-- Configuration Menu Navigation -->
+          <div class="config-tabs">
+            <button class="config-tab-btn active" data-tab="tab-convert">Convert</button>
+            <button class="config-tab-btn" data-tab="tab-audio">Audio</button>
+            <button class="config-tab-btn" data-tab="tab-video">Mute</button>
+            <button class="config-tab-btn" data-tab="tab-extract">Mux Subs</button>
+            <button class="config-tab-btn" data-tab="tab-frames">GIFs</button>
+            <button class="config-tab-btn" data-tab="tab-thumbs">Contact</button>
+            <button class="config-tab-btn" data-tab="tab-merge">Merge</button>
+          </div>
+
+          <div class="card-body">
+            
+            <!-- Convert Panel -->
+            <div class="tab-pane active" id="tab-convert">
+              <div class="fields-grid">
+                <div class="field-item">
+                  <label for="conv-format">Target Format</label>
+                  <select id="conv-format" class="form-select">
+                    <option value="mp4">MP4 (.mp4 Container)</option>
+                    <option value="mkv">Matroska (.mkv Container)</option>
+                    <option value="webm">WebM (.webm Container)</option>
+                    <option value="avi">AVI (.avi Legacy)</option>
+                    <option value="mov">QuickTime MOV (.mov)</option>
+                    <option value="ts">MPEG-TS (.ts Broadcast)</option>
+                    <option value="flv">Flash Video (.flv Legacy)</option>
+                    <option value="ogg">Ogg Video (.ogg Open)</option>
+                    <option value="m4v">Apple M4V (.m4v)</option>
+                  </select>
+                </div>
+                
+                <div class="field-item">
+                  <label for="conv-hwaccel">Hardware Acceleration</label>
+                  <select id="conv-hwaccel" class="form-select">
+                    <option value="auto">Auto-Detect GPU (Recommended)</option>
+                    <option value="none">Disable (Software CPU only)</option>
+                  </select>
+                  <div id="detected-gpus" class="detected-gpus-box"></div>
+                </div>
+                
+                <div class="field-item">
+                  <label for="conv-vcodec">Video Encoder</label>
+                  <select id="conv-vcodec" class="form-select">
+                    <option value="libx264">libx264 (H.264 High Compatibility)</option>
+                    <option value="libx265">libx265 (H.265 Space-Saving HEVC)</option>
+                    <option value="libvpx-vp9">libvpx-vp9 (VP9 Open Web)</option>
+                    <option value="libaom-av1">libaom-av1 (AV1 Next-Gen)</option>
+                    <option value="prores">prores (Apple ProRes Intermediate)</option>
+                    <option value="mpeg4">mpeg4 (MPEG-4 Part 2)</option>
+                    <option value="libvpx">libvpx (VP8 WebM Legacy)</option>
+                    <option value="libxvid">libxvid (Xvid Legacy)</option>
+                    <option value="copy">Direct Copy (Mux streams directly)</option>
+                  </select>
+                </div>
+
+                <div class="field-item">
+                  <label for="conv-resolution">Output Frame Resolution</label>
+                  <select id="conv-resolution" class="form-select">
+                    <option value="original">Original Aspect Ratio</option>
+                    <option value="3840x2160">2160p 4K Ultra HD</option>
+                    <option value="1920x1080">1080p Full HD</option>
+                    <option value="1280x720">720p HD</option>
+                    <option value="854x480">480p SD</option>
+                  </select>
+                </div>
+
+                <div class="field-item">
+                  <label for="conv-preset">Encoder Preset</label>
+                  <select id="conv-preset" class="form-select">
+                    <option value="medium">Medium (Optimal default)</option>
+                    <option value="ultrafast">Ultrafast (Minimal compression)</option>
+                    <option value="superfast">Superfast</option>
+                    <option value="veryfast">Veryfast</option>
+                    <option value="fast">Fast</option>
+                    <option value="slow">Slow (Max compression)</option>
+                    <option value="veryslow">Veryslow (Extreme crunch)</option>
+                  </select>
+                </div>
+
+                <div class="field-item range-slider-box">
+                  <div class="slider-details">
+                    <label for="conv-crf">Constant Rate Factor (CRF)</label>
+                    <span class="badge" id="crf-value">23</span>
+                  </div>
+                  <input type="range" id="conv-crf" min="0" max="51" value="23" class="form-slider">
+                  <p class="field-tip">Lower values yield sharper frames and larger files. Recommended: 18-28.</p>
+                </div>
+
+                <div class="field-item">
+                  <label for="conv-vbitrate">Video Bitrate Override</label>
+                  <input type="text" id="conv-vbitrate" placeholder="e.g. 6000k, 5M (bypasses CRF)" class="form-input">
+                </div>
+
+                <div class="field-item">
+                  <label for="conv-acodec">Audio Encoder</label>
+                  <select id="conv-acodec" class="form-select">
+                    <option value="aac">AAC (Modern default)</option>
+                    <option value="libmp3lame">MP3 (Universal compatibility)</option>
+                    <option value="libopus">Opus (Audiophile/Voice)</option>
+                    <option value="flac">FLAC (Lossless Studio)</option>
+                    <option value="ac3">AC3 (Dolby Digital AC-3)</option>
+                    <option value="pcm_s16le">pcm_s16le (WAV Lossless 16-bit)</option>
+                    <option value="libvorbis">Vorbis (Ogg Audio)</option>
+                    <option value="alac">alac (Apple Lossless ALAC)</option>
+                    <option value="copy">Direct Copy</option>
+                    <option value="none">Mute (Strip Audio streams)</option>
+                  </select>
+                </div>
+
+                <div class="field-item">
+                  <label for="conv-abitrate">Audio Bitrate</label>
+                  <select id="conv-abitrate" class="form-select">
+                    <option value="128k">128 kbps (Standard)</option>
+                    <option value="192k">192 kbps (High Quality)</option>
+                    <option value="256k">256 kbps (Premium)</option>
+                    <option value="320k">320 kbps (Max MP3/AAC)</option>
+                    <option value="96k">96 kbps (Voice)</option>
+                  </select>
+                </div>
+
+                <div class="field-item">
+                  <label for="conv-sub-mode">Subtitle Export Mode</label>
+                  <select id="conv-sub-mode" class="form-select">
+                    <option value="soft">Soft Embed (Toggleable track mux)</option>
+                    <option value="hard">Hard Burn-in (Overlays text pixels onto video)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Extract Audio Panel -->
+            <div class="tab-pane" id="tab-audio">
+              <div class="fields-grid">
+                <div class="field-item">
+                  <label for="extract-audio-codec">Audio Format</label>
+                  <select id="extract-audio-codec" class="form-select">
+                    <option value="libmp3lame">MP3 Audio (.mp3)</option>
+                    <option value="aac">AAC Audio (.m4a)</option>
+                    <option value="flac">FLAC Lossless (.flac)</option>
+                    <option value="pcm_s16le">WAV Lossless (.wav)</option>
+                    <option value="libopus">Opus Audio (.opus)</option>
+                  </select>
+                </div>
+                <div class="field-item">
+                  <label for="extract-audio-bitrate">Audio Bitrate</label>
+                  <select id="extract-audio-bitrate" class="form-select">
+                    <option value="320k">320 kbps (Audiophile)</option>
+                    <option value="256k">256 kbps</option>
+                    <option value="192k">192 kbps (Standard)</option>
+                    <option value="128k">128 kbps</option>
+                  </select>
+                </div>
+              </div>
+              <div class="hud-card-info">
+                <p>Extracts the selected audio channel stream directly into a standalone audio file, bypassing video channels.</p>
+              </div>
+            </div>
+
+            <!-- Video Only Panel -->
+            <div class="tab-pane" id="tab-video">
+              <div class="fields-grid">
+                <div class="field-item">
+                  <label for="extract-video-codec">Video Encoder</label>
+                  <select id="extract-video-codec" class="form-select">
+                    <option value="copy">Direct Copy (Fastest, 0 re-encoding artifacts)</option>
+                    <option value="libx264">libx264 (Re-encode to H.264)</option>
+                    <option value="libx265">libx265 (Re-encode to H.265 HEVC)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="hud-card-info">
+                <p>Mutes the media stream. Exports a video track completely isolated from any audio tracks.</p>
+              </div>
+            </div>
+
+            <!-- Extract Element Panel -->
+            <div class="tab-pane" id="tab-extract">
+              <div class="fields-grid">
+                <div class="field-item">
+                  <label for="extract-element-type">Track Target</label>
+                  <select id="extract-element-type" class="form-select">
+                    <option value="subtitles">Subtitle Tracks</option>
+                    <option value="chapters">Chapters Metadata (JSON File)</option>
+                  </select>
+                </div>
+                
+                <div class="field-item" id="extract-sub-format-group">
+                  <label for="extract-sub-format">Subtitle Output Format</label>
+                  <select id="extract-sub-format" class="form-select">
+                    <option value="srt">SubRip (.srt)</option>
+                    <option value="vtt">WebVTT (.vtt)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="hud-card-info">
+                <p>Extracts subtitle files or chapter points from the video container and saves them directly as text/JSON elements.</p>
+              </div>
+            </div>
+
+            <!-- Frames & GIFs Panel -->
+            <div class="tab-pane" id="tab-frames">
+              <div class="fields-grid">
+                <div class="field-item">
+                  <label for="frames-mode">Extraction Method</label>
+                  <select id="frames-mode" class="form-select">
+                    <option value="single">Single Still Image Frame</option>
+                    <option value="interval">Sequential Frames at Interval</option>
+                    <option value="gif">High-Quality Animated GIF Clip</option>
+                  </select>
+                </div>
+
+                <div class="field-item">
+                  <label for="frames-format">Image Encoding</label>
+                  <select id="frames-format" class="form-select">
+                    <option value="png">Lossless PNG (.png)</option>
+                    <option value="jpg">Compressed JPEG (.jpg)</option>
+                  </select>
+                </div>
+
+                <div class="field-item" id="group-timestamp">
+                  <label for="frames-timestamp">Seek Position Timestamp</label>
+                  <input type="text" id="frames-timestamp" class="form-input" value="00:00:01">
+                  <p class="field-tip">Format: HH:MM:SS or integer seconds.</p>
+                </div>
+
+                <div class="field-item hidden" id="group-duration">
+                  <label for="frames-duration">GIF Loop Duration (Seconds)</label>
+                  <input type="number" id="frames-duration" class="form-input" min="1" max="60" value="5">
+                </div>
+
+                <div class="field-item hidden" id="group-fps">
+                  <label for="frames-fps" id="lbl-fps">Framerate (FPS)</label>
+                  <input type="number" id="frames-fps" class="form-input" min="0.1" step="0.1" value="1">
+                </div>
+              </div>
+            </div>
+
+            <!-- Thumbnail Grid Panel -->
+            <div class="tab-pane" id="tab-thumbs">
+              <div class="fields-grid">
+                <div class="field-item">
+                  <label for="grid-cols">Sheet Columns</label>
+                  <input type="number" id="grid-cols" class="form-input" min="2" max="10" value="4">
+                </div>
+                <div class="field-item">
+                  <label for="grid-rows">Sheet Rows</label>
+                  <input type="number" id="grid-rows" class="form-input" min="2" max="10" value="4">
+                </div>
+              </div>
+              <div class="hud-card-info">
+                <p>Splits the video duration into segments, overlays clean timestamp titles onto each segment frame, and tiles them into a neat grid.</p>
+              </div>
+            </div>
+
+            <!-- Merge/Embed Panel -->
+            <div class="tab-pane" id="tab-merge">
+              <div class="fields-grid">
+                <div class="field-item">
+                  <label for="merge-type">Integration Target</label>
+                  <select id="merge-type" class="form-select">
+                    <option value="audio">Inject External Audio Track</option>
+                    <option value="sub">Inject External Subtitle File</option>
+                  </select>
+                </div>
+
+                <div class="field-item" id="group-merge-file">
+                  <label id="lbl-merge-file" for="merge-filepath">External File Absolute Path</label>
+                  <input type="text" id="merge-filepath" class="form-input" placeholder="C:\Users\Username\input.srt">
+                </div>
+
+                <div class="field-item" id="group-merge-audio-mode">
+                  <label for="merge-audio-mode">Mux Mode</label>
+                  <select id="merge-audio-mode" class="form-select">
+                    <option value="replace">Overwrite Existing Channels</option>
+                    <option value="add">Append as Auxiliary Audio Track 2</option>
+                  </select>
+                </div>
+
+                <div class="field-item hidden" id="group-merge-sub-mode">
+                  <label for="merge-sub-mode">Mux Mode</label>
+                  <select id="merge-sub-mode" class="form-select">
+                    <option value="soft">Soft Embed (Toggleable track mux)</option>
+                    <option value="hard">Hard Burn-in (Overlays text pixels onto video)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Custom Output Destination -->
+            <div class="destination-card">
+              <label for="custom-output-path">Destination Path (Optional)</label>
+              <input type="text" id="custom-output-path" class="form-input" placeholder="Leave empty for source folder + suffix">
+              <p class="field-tip">Absolute folder path where output will be saved directly on your hard disk.</p>
+            </div>
+
+            <!-- Start Process Trigger Button -->
+            <button class="action-btn" id="btn-start-process">
+              <div class="btn-glow"></div>
+              <svg class="action-svg" viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="6 3 20 12 6 21 6 3"/>
+              </svg>
+              <span>LAUNCH OBSIDIAN PIPELINE</span>
+            </button>
+            
+          </div>
+        </section>
+      </div>
+
+    </div>
+
+    <!-- UI Footer -->
+    <footer class="app-footer">
+      <div class="footer-left">
+        <span>Obsidian Codec — Next-Gen Media Tool</span>
+        <span class="divider">|</span>
+        <span class="dim">FFmpeg Core (Essencials build)</span>
+      </div>
+      <div class="footer-right">
+        <span>MIT License. Attributions to palletsprojects, Textualize & gyan.dev</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Loading Animation Modal Overlay (EXACT SAME AS TEMPLATE) -->
+  <div class="modal-overlay hidden" id="processing-modal">
+    <div class="processing-modal-layout" id="processing-layout">
+      <div class="loading-modal-card">
+        
+        <!-- Logo spinning wrapper -->
+        <div class="logo-wrapper">
+          <div class="glow-bg"></div>
+          <img class="layer layer-glow" src="/assets/loading_animation/last_layer.png" alt="">
+          <img class="layer layer-middle" src="/assets/loading_animation/middle_layer.png" alt="">
+          <img class="layer layer-top" src="/assets/loading_animation/top_layer.png" alt="">
+        </div>
+        
+        <!-- Loading bar container -->
+        <div class="bar-wrap">
+          <div class="bar"></div>
+        </div>
+        
+        <p class="loading-text" id="loading-txt-label">Loading</p>
+  
+        <!-- Processor / Encoder Indicator -->
+        <div class="processor-hud-line" id="processor-indicator-wrap">
+          <span class="processor-lbl">Pipeline Engine:</span>
+          <span class="processor-val" id="processor-value">Auto-Detecting</span>
+        </div>
+  
+        <!-- Realtime Progress Stats -->
+        <div class="status-hud">
+          <div class="hud-percentage" id="status-percent">0%</div>
+          <div class="hud-cols">
+            <div class="hud-col"><span class="label">Speed</span><span class="value" id="status-speed">0.00x</span></div>
+            <div class="hud-col"><span class="label">Time Remaining</span><span class="value" id="status-eta">00:00</span></div>
+            <div class="hud-col"><span class="label">Output Size</span><span class="value" id="status-size">0.0 MB</span></div>
+          </div>
+        </div>
+  
+        <!-- Realtime console pipeline logging -->
+        <div class="console-box">
+          <div class="console-top">Pipeline logs console</div>
+          <div class="console-body" id="console-output">Connecting to background media thread daemon...</div>
+        </div>
+  
+        <!-- Toggle Preview Switch -->
+        <div class="preview-toggle-wrap">
+          <label class="fancy-switch">
+            <input type="checkbox" id="chk-process-preview">
+            <span class="switch-slider"></span>
+          </label>
+          <span class="switch-lbl">Show Video Preview</span>
+        </div>
+  
+        <!-- Cancel btn -->
+        <button class="cancel-btn" id="btn-cancel-process">ABORT PIPELINE</button>
+      </div>
+
+      <!-- Processing Preview Card -->
+      <div class="preview-modal-card" id="process-preview-card">
+        <div class="card-header">
+          <div class="header-icon cyan-shadow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="6 3 20 12 6 21 6 3"/>
+            </svg>
+          </div>
+          <h2>Pipeline Live Preview</h2>
+        </div>
+        <div class="card-body">
+          <div class="video-preview-wrapper">
+            <img id="process-preview-img" src="" alt="Processing preview frame..." style="width: 100%; height: 100%; object-fit: contain;">
+          </div>
+          <p class="preview-tip">Real-time frame extraction matching encoding pipeline progress.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Final Completion Modal Overlay -->
+  <div class="modal-overlay hidden" id="completion-modal">
+    <div class="modal-hud-card success-hud-card">
+      <div class="hud-icon-circle success-circle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+      </div>
+      <h3>Conversion Complete</h3>
+      <p class="hud-desc">The file has been successfully written to disk.</p>
+      
+      <div class="hud-summary-card" id="complete-summary-card" style="max-height: 200px; overflow-y: auto;">
+        <!-- Will be populated dynamically in app.js -->
+      </div>
+
+      <div class="hud-buttons">
+        <button class="primary-hud-btn" id="btn-open-folder">Open File Location</button>
+        <a href="#" class="primary-hud-btn hidden" id="btn-download-file">Download Output</a>
+        <button class="flat-hud-btn" id="btn-complete-close">Return to Workspace</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error Modal Overlay -->
+  <div class="modal-overlay hidden" id="error-modal">
+    <div class="modal-hud-card error-hud-card">
+      <div class="hud-icon-circle error-circle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </div>
+      <h3>Operation Aborted</h3>
+      <p class="hud-desc">The processing pipeline failed during conversion.</p>
+      
+      <div class="error-console" id="error-details-box">
+        FFmpeg pipeline core failure output.
+      </div>
+
+      <div class="hud-buttons">
+        <button class="primary-hud-btn" id="btn-error-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shutdown Overlay -->
+  <div id="shutdown-overlay" class="modal-overlay hidden">
+    <div class="modal-hud-card error-hud-card" style="border-color: rgba(0, 207, 255, 0.2); background: rgba(10, 10, 16, 0.98);">
+      <div class="hud-icon-circle error-circle" style="color: var(--neon-cyan); border-color: rgba(0, 207, 255, 0.3); background: rgba(0, 207, 255, 0.08);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+          <line x1="12" y1="2" x2="12" y2="12"></line>
+        </svg>
+      </div>
+      <h3>Engine Terminated</h3>
+      <p class="hud-desc" style="margin-bottom: 0;">Obsidian Codec backend engine has been safely shut down.<br>You can close this browser tab and the terminal window now.</p>
+    </div>
+  </div>
+
+  <!-- Script source -->
+  <script src="/static/app.js"></script>
+</body>
+</html>
