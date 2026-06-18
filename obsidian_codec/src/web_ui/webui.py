@@ -8,7 +8,12 @@ import threading
 import time
 import secrets
 import signal
-from flask import Flask, request, jsonify, render_template, send_from_directory, send_file, abort
+import fnmatch
+import zipfile
+import re
+import glob
+import webbrowser
+from flask import Flask, request, jsonify, render_template, send_from_directory, send_file, abort, Response
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -738,9 +743,6 @@ def api_status(job_id):
 
 @app.route("/api/job-frame/<job_id>", methods=["GET"])
 def api_job_frame(job_id):
-    from obsidian_codec.src.utils.ffmpeg_utils import ACTIVE_JOBS, JOBS_LOCK
-    from flask import Response
-    
     with JOBS_LOCK:
         job = ACTIVE_JOBS.get(job_id)
         if not job:
@@ -845,11 +847,6 @@ def api_open_folder():
 
 @app.route("/api/download/<session_id>/<path:filename>", methods=["GET"])
 def api_download(session_id, filename):
-    import fnmatch
-    import zipfile
-    import re
-    import glob
-
     session_dir = get_session_dir(session_id)
     
     # Check if this is a pattern representation (e.g., %04d)
@@ -954,7 +951,6 @@ def api_quit():
     return jsonify({"success": True, "message": "Server shutting down."})
 
 def main() -> None:
-    import webbrowser
     ensure_temp_dir()
     cleanup_temp_dir() # Initial cleanup on launch
     

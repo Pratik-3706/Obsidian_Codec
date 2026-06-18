@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import shutil
 import subprocess
 import threading
 import time
@@ -11,6 +12,7 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 # Format: { job_id: { 'status': ..., 'progress': ..., 'speed': ..., 'eta': ..., 'size': ..., 'log': [], 'process': ..., 'output_path': ..., 'input_path': ..., 'error': ... } }
 ACTIVE_JOBS: Dict[str, Dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
+_SUPPORTED_HW_ENCODERS: Optional[List[str]] = None
 
 TEMP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "temp"))
 OUTPUT_ROOT = os.path.abspath(os.environ.get("OUTPUT_ROOT", os.path.expanduser("~/Obsidian_Codec_Output")))
@@ -226,13 +228,15 @@ def cleanup_temp_dir() -> None:
             if os.path.isfile(file_path) or os.path.islink(file_path):
                 os.unlink(file_path)
             elif os.path.isdir(file_path):
-                import shutil
                 shutil.rmtree(file_path)
         except Exception as e:
             print(f"Failed to delete {file_path}. Reason: {e}", file=sys.stderr)
 
 def get_supported_hw_encoders() -> List[str]:
     """Runs short tests to check which hardware encoders are supported by the system."""
+    global _SUPPORTED_HW_ENCODERS
+    if _SUPPORTED_HW_ENCODERS is not None:
+        return _SUPPORTED_HW_ENCODERS
     supported = []
     startupinfo = None
     if sys.platform == "win32":
@@ -283,6 +287,7 @@ def get_supported_hw_encoders() -> List[str]:
     except Exception:
         pass
         
+    _SUPPORTED_HW_ENCODERS = supported
     return supported
 
 def get_job_status(job_id: str) -> Optional[Dict[str, Any]]:

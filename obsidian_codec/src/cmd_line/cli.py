@@ -3,6 +3,8 @@ import sys
 import argparse
 import uuid
 import time
+import json
+import shutil
 import threading
 from rich.console import Console
 from rich.panel import Panel
@@ -470,7 +472,6 @@ def run_command_watch(args):
                             base_d, ext_d = os.path.splitext(done_file)
                             done_file = f"{base_d}_{int(time.time())}{ext_d}"
                         
-                        import shutil
                         try:
                             shutil.move(f_path, done_file)
                             console.print(f"[green]Moved original input to: {done_file}[/green]")
@@ -600,7 +601,6 @@ def run_interactive_wizard():
     elif op_choice == "5": # Extract Chapters
         out_path = os.path.join(input_dir, f"{base_name}_chapters.json")
         console.print(f"[cyan]Writing chapters to: {out_path}...[/cyan]")
-        import json
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(info['chapters'], f, indent=2)
         console.print("[bold green]✔ Chapters extracted successfully![/bold green]")
@@ -817,7 +817,6 @@ def main():
                 if not output_path:
                     output_path = os.path.join(input_dir, f"{base_name}_chapters.json")
                 console.print(f"[cyan]Writing chapters to: {output_path}...[/cyan]")
-                import json
                 with open(output_path, "w", encoding="utf-8") as f:
                     json.dump(meta.get("chapters", []), f, indent=2)
                 console.print("[bold green]✔ Chapters extracted successfully![/bold green]")
