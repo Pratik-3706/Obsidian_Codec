@@ -8,30 +8,38 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python
+    - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: ${{ matrix.python-version }}
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install mypy psutil flask flask-limiter rich
+        pip install mypy ruff psutil flask flask-limiter rich cryptography
         pip install -e .
 
-    - name: Syntax check
+    - name: Run ruff linter checks
       run: |
-        python -m compileall obsidian_codec
+        ruff check obsidian_codec tests
 
-    - name: Run unit tests
+    - name: Run ruff formatter checks
       run: |
-        python -m unittest discover tests
+        ruff format --check obsidian_codec tests
 
     - name: Run mypy static type checks
       run: |
         mypy obsidian_codec
+
+    - name: Run unit tests
+      run: |
+        python -m unittest discover tests
