@@ -27,6 +27,9 @@ JOBS_FILE = os.path.join(TEMP_DIR, "active_jobs.json")
 CSRF_FILE = os.path.join(TEMP_DIR, "csrf_secret.txt")
 BEARER_FILE = os.path.join(TEMP_DIR, "bearer_token.txt")
 
+# Dedicated lock to serialize file writes to JOBS_FILE across threads
+_JOBS_FILE_LOCK = threading.Lock()
+
 
 def escape_ffmpeg_filter_path(path: str) -> str:
     """Escapes special characters in path for FFmpeg filter graph (subtitles filter)."""
@@ -78,17 +81,42 @@ def is_safe_path(path: Optional[str]) -> bool:
 
 
 def save_jobs_to_disk() -> None:
+    """Persist active jobs to disk. Uses a dedicated file lock to prevent
+    concurrent writes from the stderr-reader and progress-parser threads,
+    and retries os.replace() to handle transient Windows file locks."""
+    if not _JOBS_FILE_LOCK.acquire(blocking=False):
+        # Another thread is already writing – skip this save to avoid piling up.
+        return
     try:
         ensure_temp_dir()
         serializable = {}
-        for jid, job in ACTIVE_JOBS.items():
-            serializable[jid] = {k: v for k, v in job.items() if k != "process"}
+        with JOBS_LOCK:
+            for jid, job in ACTIVE_JOBS.items():
+                serializable[jid] = {k: v for k, v in job.items() if k != "process"}
         tmp_file = JOBS_FILE + ".tmp"
         with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(serializable, f, indent=2)
-        os.replace(tmp_file, JOBS_FILE)
-    except Exception as e:
-        print(f"Error saving jobs: {e}", file=sys.stderr)
+
+        # Retry os.replace() up to 3 times to handle transient Windows file locks
+        # (antivirus, search indexer, or another thread finishing a read).
+        for attempt in range(3):
+            try:
+                os.replace(tmp_file, JOBS_FILE)
+                break
+            except OSError:
+                if attempt < 2:
+                    time.sleep(0.05)
+                else:
+                    # Last attempt failed – silently clean up the temp file
+                    try:
+                        os.unlink(tmp_file)
+                    except OSError:
+                        pass
+    except Exception:
+        # Non-critical persistence – swallow to avoid polluting CLI/WebUI output
+        pass
+    finally:
+        _JOBS_FILE_LOCK.release()
 
 
 def load_jobs_from_disk() -> None:
