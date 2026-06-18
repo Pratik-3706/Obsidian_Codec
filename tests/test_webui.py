@@ -139,6 +139,31 @@ class TestWebUI(unittest.TestCase):
             response = self.client.post("/api/upload", data={}, headers=headers)
             self.assertEqual(response.status_code, 400)
 
+    @patch("obsidian_codec.src.web_ui.webui.get_session_dir")
+    @patch("os.path.exists")
+    @patch("os.path.abspath")
+    def test_api_download_zip_empty_files(self, mock_abspath, mock_exists, mock_get_session_dir):
+        response = self.client.get("/api/download-zip/session_id", headers={"Referer": "http://127.0.0.1:5000/"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"No files specified", response.data)
+
+    @patch("obsidian_codec.src.web_ui.webui.get_session_dir")
+    @patch("os.path.exists")
+    @patch("os.path.abspath")
+    @patch("zipfile.ZipFile")
+    @patch("obsidian_codec.src.web_ui.webui.send_file")
+    def test_api_download_zip_success(self, mock_send_file, mock_zipfile, mock_abspath, mock_exists, mock_get_session_dir):
+        mock_get_session_dir.return_value = "c:/temp/session_dir"
+        mock_abspath.side_effect = lambda path: path
+        mock_exists.return_value = True
+        
+        # Flask send_file returns a Response-like object that has call_on_close
+        mock_response = patch("flask.Response").start()
+        mock_send_file.return_value = mock_response
+
+        response = self.client.get("/api/download-zip/session_id?files=test1.mp4,test2.mp4", headers={"Referer": "http://127.0.0.1:5000/"})
+        self.assertEqual(response.status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()

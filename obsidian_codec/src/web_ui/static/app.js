@@ -1296,14 +1296,42 @@ document.addEventListener('DOMContentLoaded', () => {
     document.documentElement.classList.remove('modal-open');
   });
 
+  // Globally exposed open folder helper for batch items
+  window.openBatchFolder = async function(filepath) {
+    try {
+      await fetch('/api/open-folder', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfToken
+        },
+        body: JSON.stringify({ filepath })
+      });
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   // --- 9. Completion Actions ---
   function showCompletion(jobData) {
     completionModal.classList.remove('hidden');
     
     const summaryCard = document.getElementById('complete-summary-card');
+    const modalTitle = completionModal.querySelector('h3');
+    const modalDesc = completionModal.querySelector('.hud-desc');
     
+    // Manage dynamic zip download button injection
+    let btnDownloadZip = document.getElementById('btn-download-zip');
+    if (btnDownloadZip) {
+      btnDownloadZip.remove();
+      btnDownloadZip = null;
+    }
+
     if (jobData) {
       // Single file completion
+      modalTitle.textContent = "Conversion Complete";
+      modalDesc.textContent = "The file has been successfully written to disk.";
+
       summaryCard.innerHTML = `
         <div class="summary-line">
           <span class="label">Output File</span>
@@ -1342,56 +1370,66 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } else {
       // Batch completion
-      const firstSuccess = batchResults.find(r => r.status === 'completed');
-      
-      if (isLocalMode) {
-        summaryCard.innerHTML = batchResults.map((res, idx) => `
-          <div class="summary-line" style="border-bottom: 1px dashed rgba(255, 255, 255, 0.05); padding-bottom: 10px; margin-bottom: 10px;">
-            <span class="label">File #${idx + 1}: ${escapeHtml(res.name)}</span>
-            <span class="value font-mono" style="${res.status === 'failed' ? 'color: #ef4444;' : 'color: var(--neon-cyan);'}">${res.status === 'completed' ? escapeHtml(res.path) : 'Failed: ' + escapeHtml(res.error)}</span>
-            ${res.status === 'completed' ? `<span class="value" style="font-size: 10px; color: var(--text-dim); margin-top: 2px;">Size: ${escapeHtml(res.size)}</span>` : ''}
-          </div>
-        `).join('');
-        
-        if (firstSuccess) {
-          btnOpenFolder.classList.remove('hidden');
-          btnDownloadFile.classList.add('hidden');
-          
-          btnOpenFolder.onclick = async () => {
-            try {
-              await fetch('/api/open-folder', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'X-CSRF-Token': csrfToken
-                },
-                body: JSON.stringify({ filepath: firstSuccess.path })
-              });
-            } catch (e) {
-              console.error(e);
-            }
-          };
-        } else {
-          btnOpenFolder.classList.add('hidden');
-          btnDownloadFile.classList.add('hidden');
-        }
-      } else {
-        // Web uploads batch: provide individual download links inside the card
-        summaryCard.innerHTML = batchResults.map((res, idx) => `
-          <div class="summary-line" style="border-bottom: 1px dashed rgba(255, 255, 255, 0.05); padding-bottom: 10px; margin-bottom: 10px;">
-            <span class="label">File #${idx + 1}: ${escapeHtml(res.name)}</span>
-            <span class="value font-mono" style="${res.status === 'failed' ? 'color: #ef4444;' : 'color: var(--neon-cyan);'}">${res.status === 'completed' ? escapeHtml(res.path) : 'Failed: ' + escapeHtml(res.error)}</span>
-            ${res.status === 'completed' ? `
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
-                <span style="font-size: 10px; color: var(--text-dim);">Size: ${escapeHtml(res.size)}</span>
-                <a href="/api/download/${sessionId}/${encodeURIComponent(res.path.replace(/\\/g, '/').split('/').pop())}" download style="font-size: 11px; color: var(--neon-cyan); text-decoration: underline;">Download File</a>
+      const successes = batchResults.filter(r => r.status === 'completed');
+      modalTitle.textContent = "Batch Conversion Complete";
+      modalDesc.textContent = `Successfully processed ${successes.length} of ${batchResults.length} files.`;
+
+      // Render beautiful cards for batch items without full system paths
+      summaryCard.innerHTML = batchResults.map((res, idx) => {
+        const cleanName = res.name;
+        if (isLocalMode) {
+          return `
+            <div class="batch-item-card">
+              <div class="batch-item-info">
+                <span class="batch-item-name" title="${escapeHtml(cleanName)}">${escapeHtml(cleanName)}</span>
+                <div class="batch-item-meta">
+                  <span class="batch-item-status-badge ${res.status}">${res.status}</span>
+                  ${res.status === 'completed' ? `<span style="font-size: 11px; color: var(--text-dim);">Size: ${escapeHtml(res.size)}</span>` : ''}
+                </div>
               </div>
-            ` : ''}
-          </div>
-        `).join('');
+              ${res.status === 'completed' ? `
+                <button onclick="window.openBatchFolder('${res.path.replace(/\\/g, '\\\\')}')" class="batch-item-download-link">Reveal</button>
+              ` : `
+                <span style="font-size: 11px; color: #ef4444; font-weight: 500;">Failed</span>
+              `}
+            </div>
+          `;
+        } else {
+          return `
+            <div class="batch-item-card">
+              <div class="batch-item-info">
+                <span class="batch-item-name" title="${escapeHtml(cleanName)}">${escapeHtml(cleanName)}</span>
+                <div class="batch-item-meta">
+                  <span class="batch-item-status-badge ${res.status}">${res.status}</span>
+                  ${res.status === 'completed' ? `<span style="font-size: 11px; color: var(--text-dim);">Size: ${escapeHtml(res.size)}</span>` : ''}
+                </div>
+              </div>
+              ${res.status === 'completed' ? `
+                <a href="/api/download/${sessionId}/${encodeURIComponent(res.path.replace(/\\/g, '/').split('/').pop())}" download class="batch-item-download-link">Download</a>
+              ` : `
+                <span style="font-size: 11px; color: #ef4444; font-weight: 500;">Failed</span>
+              `}
+            </div>
+          `;
+        }
+      }).join('');
+
+      btnOpenFolder.classList.add('hidden');
+      btnDownloadFile.classList.add('hidden');
+
+      // Inject Download All as ZIP button for Web Upload mode if there are multiple successful items
+      if (!isLocalMode && successes.length > 1) {
+        btnDownloadZip = document.createElement('a');
+        btnDownloadZip.id = 'btn-download-zip';
+        btnDownloadZip.className = 'primary-hud-btn purple-hud-btn';
         
-        btnOpenFolder.classList.add('hidden');
-        btnDownloadFile.classList.add('hidden');
+        const filenames = successes.map(s => s.path.replace(/\\/g, '/').split('/').pop()).join(',');
+        btnDownloadZip.href = `/api/download-zip/${sessionId}?files=${encodeURIComponent(filenames)}`;
+        btnDownloadZip.textContent = 'Download All as ZIP';
+        
+        const hudButtons = completionModal.querySelector('.hud-buttons');
+        const completeCloseBtn = document.getElementById('btn-complete-close');
+        hudButtons.insertBefore(btnDownloadZip, completeCloseBtn);
       }
     }
   }

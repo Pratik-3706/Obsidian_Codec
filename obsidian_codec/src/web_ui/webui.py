@@ -899,6 +899,47 @@ def api_download(session_id: str, filename: str) -> Any:
     return response
 
 
+@app.route("/api/download-zip/<session_id>", methods=["GET"])
+@limiter.exempt
+def api_download_zip(session_id: str) -> Any:
+    session_dir = get_session_dir(session_id)
+    files = request.args.get("files", "").split(",")
+    files = [f for f in files if f.strip()]
+    if not files:
+        return "No files specified", 400
+
+    zip_name = f"obsidian_batch_{session_id[:8]}.zip"
+    zip_path = os.path.join(session_dir, zip_name)
+
+    valid_paths = []
+    for filename in files:
+        file_path = os.path.abspath(os.path.join(session_dir, filename))
+        if file_path.startswith(session_dir) and os.path.exists(file_path):
+            valid_paths.append(file_path)
+
+    if not valid_paths:
+        return "No valid files found for zipping", 404
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for path in valid_paths:
+            zipf.write(path, os.path.basename(path))
+
+    response = send_file(zip_path, as_attachment=True, download_name=zip_name)
+
+    @response.call_on_close
+    def cleanup_zip() -> None:
+        try:
+            if os.path.exists(zip_path):
+                os.unlink(zip_path)
+            for path in valid_paths:
+                if os.path.exists(path):
+                    os.unlink(path)
+        except Exception as e:
+            print(f"Failed to delete download zip/files on close: {e}", file=sys.stderr)
+
+    return response
+
+
 @app.route("/api/preview", methods=["GET"])
 @limiter.exempt
 def api_preview() -> Any:
