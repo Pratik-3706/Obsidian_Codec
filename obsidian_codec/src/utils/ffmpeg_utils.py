@@ -12,6 +12,53 @@ ACTIVE_JOBS = {}
 JOBS_LOCK = threading.Lock()
 
 TEMP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "temp"))
+OUTPUT_DIR = os.path.abspath(os.path.expanduser("~/Obsidian_Codec_Output"))
+
+def is_safe_path(path):
+    if not path:
+        return False
+    try:
+        real_path = os.path.realpath(os.path.abspath(path))
+        for base in [TEMP_DIR, OUTPUT_DIR]:
+            real_base = os.path.realpath(os.path.abspath(base))
+            if real_path == real_base or real_path.startswith(real_base + os.sep):
+                return True
+        home = os.path.expanduser("~")
+        real_home = os.path.realpath(os.path.abspath(home))
+        if real_path == real_home or real_path.startswith(real_home + os.sep):
+            return True
+        custom_bases = os.environ.get("OBSIDIAN_CODEC_ALLOWED_BASES")
+        if custom_bases:
+            for base in custom_bases.split(os.pathsep):
+                if base.strip():
+                    real_base = os.path.realpath(os.path.abspath(base.strip()))
+                    if real_path == real_base or real_path.startswith(real_base + os.sep):
+                        return True
+    except Exception:
+        pass
+    return False
+
+def is_safe_output_path(path):
+    if not path:
+        return False
+    if not is_safe_path(path):
+        return False
+    if os.path.islink(path):
+        return False
+    ext = os.path.splitext(path)[1].lower()
+    allowed_exts = {
+        ".mp4", ".mkv", ".avi", ".mov", ".webm", ".ts", ".flv", ".ogg", ".m4v",
+        ".mp3", ".opus", ".aac", ".wav", ".flac", ".alac", ".m4a",
+        ".srt", ".vtt",
+        ".png", ".jpg", ".jpeg", ".gif",
+        ".json"
+    }
+    if ext not in allowed_exts:
+        return False
+    base_name = os.path.basename(path)
+    if base_name.startswith("."):
+        return False
+    return True
 
 TRANSCODING_COMPATIBILITY_MATRIX = {
     "webm": {
@@ -219,7 +266,7 @@ def cancel_job(job_id):
         
         # Clean up output file
         out_path = job.get('output_path')
-        if out_path and os.path.exists(out_path):
+        if out_path and os.path.exists(out_path) and is_safe_output_path(out_path):
             try:
                 os.unlink(out_path)
             except Exception as e:
@@ -503,7 +550,7 @@ def run_ffmpeg_subprocess(job_id, cmd, total_duration, output_path, input_path):
                     err_msg = "\n".join(stderr_lines[-5:]) if stderr_lines else "Unknown FFmpeg error"
                     ACTIVE_JOBS[job_id]['error'] = f"FFmpeg failed with exit code {proc.returncode}. Error:\n{err_msg}"
                     # Remove incomplete output file
-                    if os.path.exists(output_path):
+                    if os.path.exists(output_path) and is_safe_output_path(output_path):
                         try:
                             os.unlink(output_path)
                         except Exception:
@@ -516,7 +563,7 @@ def run_ffmpeg_subprocess(job_id, cmd, total_duration, output_path, input_path):
                 ACTIVE_JOBS[job_id]['status'] = 'failed'
                 ACTIVE_JOBS[job_id]['finished_time'] = time.time()
                 ACTIVE_JOBS[job_id]['error'] = str(e)
-        if os.path.exists(output_path):
+        if os.path.exists(output_path) and is_safe_output_path(output_path):
             try:
                 os.unlink(output_path)
             except Exception:

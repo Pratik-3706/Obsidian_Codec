@@ -9,6 +9,30 @@ document.addEventListener('DOMContentLoaded', () => {
     return id;
   })();
 
+  // HTML escaping helper
+  function escapeHtml(s) {
+    if (s === null || s === undefined) return '';
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[c]);
+  }
+
+  // CSRF token storage
+  let csrfToken = '';
+  async function fetchCsrfToken() {
+    try {
+      const response = await fetch('/api/csrf');
+      const data = await response.json();
+      csrfToken = data.token;
+    } catch (e) {
+      console.error("Failed to fetch CSRF token", e);
+    }
+  }
+
   // Application State
   let sourceFilePath = null;
   let isLocalMode = true;
@@ -146,7 +170,10 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const response = await fetch('/api/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfToken
+        },
         body: JSON.stringify({ filepath })
       });
       
@@ -163,7 +190,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const firstFile = data.files[0];
         const subResponse = await fetch('/api/analyze', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrfToken
+          },
           body: JSON.stringify({ filepath: firstFile })
         });
         const subData = await subResponse.json();
@@ -209,7 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="track-list" style="max-height: 150px; overflow-y: auto; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 10px; border: 1px solid var(--glass-border);">
           ${batchQueue.map((f, i) => `
             <div style="font-size: 12px; padding: 6px 10px; border-bottom: 1px dashed rgba(255,255,255,0.05); color: var(--text-dim); display: flex; justify-content: space-between;">
-              <span>#${i + 1}: ${f.replace(/\\/g, '/').split('/').pop()}</span>
+              <span>#${i + 1}: ${escapeHtml(f.replace(/\\/g, '/').split('/').pop())}</span>
               <span style="font-family: var(--font-mono); color: var(--neon-cyan); font-size: 10px;">QUEUED</span>
             </div>
           `).join('')}
@@ -301,6 +331,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload', true);
+      xhr.setRequestHeader('X-CSRF-Token', csrfToken);
 
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
@@ -363,8 +394,8 @@ document.addEventListener('DOMContentLoaded', () => {
         div.className = 'stream-item active';
         div.innerHTML = `
           <div class="stream-details">
-            <span class="stream-title">${stream.display_name}</span>
-            <span class="stream-meta">Resolution: ${stream.width}x${stream.height} | FPS: ${stream.r_frame_rate} | Codec: ${stream.codec_long_name}</span>
+            <span class="stream-title">${escapeHtml(stream.display_name)}</span>
+            <span class="stream-meta">Resolution: ${stream.width}x${stream.height} | FPS: ${stream.r_frame_rate} | Codec: ${escapeHtml(stream.codec_long_name)}</span>
           </div>
           <span class="stream-badge">Video</span>
         `;
@@ -385,8 +416,8 @@ document.addEventListener('DOMContentLoaded', () => {
         div.innerHTML = `
           <input type="radio" name="audio-stream-radio" value="${stream.index}" ${idx === 0 ? 'checked' : ''} class="stream-radio">
           <div class="stream-details">
-            <span class="stream-title">${stream.display_name}</span>
-            <span class="stream-meta">Channels: ${stream.channel_layout} (${stream.channels} ch) | Sample Rate: ${stream.sample_rate}Hz</span>
+            <span class="stream-title">${escapeHtml(stream.display_name)}</span>
+            <span class="stream-meta">Channels: ${escapeHtml(stream.channel_layout)} (${stream.channels} ch) | Sample Rate: ${stream.sample_rate}Hz</span>
           </div>
           <span class="stream-badge">Audio</span>
         `;
@@ -430,8 +461,8 @@ document.addEventListener('DOMContentLoaded', () => {
         div.innerHTML = `
           <input type="radio" name="sub-stream-radio" value="${stream.index}" class="stream-radio">
           <div class="stream-details">
-            <span class="stream-title">${stream.display_name}</span>
-            <span class="stream-meta">Codec: ${stream.codec_name.toUpperCase()}</span>
+            <span class="stream-title">${escapeHtml(stream.display_name)}</span>
+            <span class="stream-meta">Codec: ${escapeHtml(stream.codec_name.toUpperCase())}</span>
           </div>
           <span class="stream-badge">Subtitle</span>
         `;
@@ -909,7 +940,10 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const response = await fetch('/api/convert', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfToken
+        },
         body: JSON.stringify(payload)
       });
       
@@ -1033,7 +1067,10 @@ document.addEventListener('DOMContentLoaded', () => {
       btnCancelProcess.textContent = "Stopping...";
       
       try {
-        await fetch(`/api/cancel/${activeJobId}`, { method: 'POST' });
+        await fetch(`/api/cancel/${activeJobId}`, {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': csrfToken }
+        });
       } catch (err) {
         console.error("Cancellation request failed:", err);
       } finally {
@@ -1061,11 +1098,11 @@ document.addEventListener('DOMContentLoaded', () => {
       summaryCard.innerHTML = `
         <div class="summary-line">
           <span class="label">Output File</span>
-          <span class="value font-mono" id="complete-path">${jobData.output_path}</span>
+          <span class="value font-mono" id="complete-path">${escapeHtml(jobData.output_path)}</span>
         </div>
         <div class="summary-line">
           <span class="label">Final File Size</span>
-          <span class="value" id="complete-size">${jobData.size}</span>
+          <span class="value" id="complete-size">${escapeHtml(jobData.size)}</span>
         </div>
       `;
       
@@ -1077,7 +1114,10 @@ document.addEventListener('DOMContentLoaded', () => {
           try {
             await fetch('/api/open-folder', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+              },
               body: JSON.stringify({ filepath: jobData.output_path })
             });
           } catch (e) {
@@ -1098,9 +1138,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (isLocalMode) {
         summaryCard.innerHTML = batchResults.map((res, idx) => `
           <div class="summary-line" style="border-bottom: 1px dashed rgba(255, 255, 255, 0.05); padding-bottom: 10px; margin-bottom: 10px;">
-            <span class="label">File #${idx + 1}: ${res.name}</span>
-            <span class="value font-mono" style="${res.status === 'failed' ? 'color: #ef4444;' : 'color: var(--neon-cyan);'}">${res.status === 'completed' ? res.path : 'Failed: ' + res.error}</span>
-            ${res.status === 'completed' ? `<span class="value" style="font-size: 10px; color: var(--text-dim); margin-top: 2px;">Size: ${res.size}</span>` : ''}
+            <span class="label">File #${idx + 1}: ${escapeHtml(res.name)}</span>
+            <span class="value font-mono" style="${res.status === 'failed' ? 'color: #ef4444;' : 'color: var(--neon-cyan);'}">${res.status === 'completed' ? escapeHtml(res.path) : 'Failed: ' + escapeHtml(res.error)}</span>
+            ${res.status === 'completed' ? `<span class="value" style="font-size: 10px; color: var(--text-dim); margin-top: 2px;">Size: ${escapeHtml(res.size)}</span>` : ''}
           </div>
         `).join('');
         
@@ -1112,7 +1152,10 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
               await fetch('/api/open-folder', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-CSRF-Token': csrfToken
+                },
                 body: JSON.stringify({ filepath: firstSuccess.path })
               });
             } catch (e) {
@@ -1127,11 +1170,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // Web uploads batch: provide individual download links inside the card
         summaryCard.innerHTML = batchResults.map((res, idx) => `
           <div class="summary-line" style="border-bottom: 1px dashed rgba(255, 255, 255, 0.05); padding-bottom: 10px; margin-bottom: 10px;">
-            <span class="label">File #${idx + 1}: ${res.name}</span>
-            <span class="value font-mono" style="${res.status === 'failed' ? 'color: #ef4444;' : 'color: var(--neon-cyan);'}">${res.status === 'completed' ? res.path : 'Failed: ' + res.error}</span>
+            <span class="label">File #${idx + 1}: ${escapeHtml(res.name)}</span>
+            <span class="value font-mono" style="${res.status === 'failed' ? 'color: #ef4444;' : 'color: var(--neon-cyan);'}">${res.status === 'completed' ? escapeHtml(res.path) : 'Failed: ' + escapeHtml(res.error)}</span>
             ${res.status === 'completed' ? `
               <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
-                <span style="font-size: 10px; color: var(--text-dim);">Size: ${res.size}</span>
+                <span style="font-size: 10px; color: var(--text-dim);">Size: ${escapeHtml(res.size)}</span>
                 <a href="/api/download/${sessionId}/${encodeURIComponent(res.path.replace(/\\/g, '/').split('/').pop())}" download style="font-size: 11px; color: var(--neon-cyan); text-decoration: underline;">Download File</a>
               </div>
             ` : ''}
@@ -1221,7 +1264,7 @@ document.addEventListener('DOMContentLoaded', () => {
               <line x1="6" y1="6" x2="6.01" y2="6"></line>
               <line x1="6" y1="18" x2="6.01" y2="18"></line>
             </svg>
-            <span>${gpu}</span>
+            <span>${escapeHtml(gpu)}</span>
           `;
           gpusContainer.appendChild(gpuDiv);
         });
@@ -1295,7 +1338,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.addEventListener('beforeunload', () => {
     if (isDownloading) return;
-    navigator.sendBeacon(`/api/cleanup-session?session_id=${sessionId}`);
+    navigator.sendBeacon(`/api/cleanup-session?session_id=${sessionId}&csrf_token=${encodeURIComponent(csrfToken)}`);
   });
 
   // --- 14. Engine Quit / Termination Endpoint ---
@@ -1309,7 +1352,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         try {
-          await fetch('/api/quit', { method: 'POST' });
+          await fetch('/api/quit', {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': csrfToken }
+          });
         } catch (e) {
           console.error("Shutdown call error:", e);
         }
@@ -1321,5 +1367,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  loadHwEncoders();
+  (async () => {
+    await fetchCsrfToken();
+    loadHwEncoders();
+  })();
 });

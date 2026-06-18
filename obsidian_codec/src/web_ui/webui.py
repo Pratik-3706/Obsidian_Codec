@@ -6,7 +6,11 @@ import subprocess
 import json
 import threading
 import time
-from flask import Flask, request, jsonify, render_template, send_from_directory, send_file
+import secrets
+import signal
+from flask import Flask, request, jsonify, render_template, send_from_directory, send_file, abort
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 
 # Add project root and src directory to Python path
@@ -27,17 +31,57 @@ from obsidian_codec.src.utils.ffmpeg_utils import (
     ensure_temp_dir,
     get_supported_hw_encoders,
     get_detected_gpus,
-    validate_transcoding_combination
+    validate_transcoding_combination,
+    is_safe_path,
+    is_safe_output_path,
+    OUTPUT_DIR
 )
 
 app = Flask(
     __name__,
-    template_folder="templet",
+    template_folder="templates",
     static_folder="static"
 )
 
 # Enable template auto-reload
 app.config['TEMPLATES_AUTO_RELOAD'] = True
+
+# CSRF protection token
+app.config["CSRF_TOKEN"] = secrets.token_urlsafe(32)
+
+# Rate limiter setup
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=["120 per minute"]
+)
+
+@app.before_request
+def security_checks():
+    # 1. DNS Rebinding Protection
+    host = request.headers.get("Host", "")
+    host_name = host.split(":")[0]
+    if host_name not in ("127.0.0.1", "localhost"):
+        abort(400, description="Invalid Host header (DNS rebinding protection)")
+        
+    # 2. CSRF Protection for state-changing methods
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        token = request.headers.get("X-CSRF-Token") or request.args.get("csrf_token")
+        if not token:
+            try:
+                if request.is_json and request.json:
+                    token = request.json.get("csrf_token")
+            except Exception:
+                pass
+            if not token and request.form:
+                token = request.form.get("csrf_token")
+                
+        if not token or not secrets.compare_digest(token, app.config["CSRF_TOKEN"]):
+            abort(403, description="Invalid CSRF token")
+
+@app.route("/api/csrf", methods=["GET"])
+def get_csrf():
+    return jsonify({"token": app.config["CSRF_TOKEN"]})
 
 def get_session_dir(session_id):
     if not session_id:
@@ -73,6 +117,11 @@ def api_analyze():
     else:
         paths = [filepath_input.strip()]
         
+    # Path sandbox checks
+    for p in paths:
+        if not is_safe_path(p):
+            return jsonify({"error": f"Access denied: path is outside sandbox: {p}"}), 403
+        
     # Check if a single directory was provided
     if len(paths) == 1 and os.path.isdir(paths[0]):
         dir_path = paths[0]
@@ -82,7 +131,9 @@ def api_analyze():
             for filename in os.listdir(dir_path):
                 ext = os.path.splitext(filename)[1].lower()
                 if ext in video_extensions:
-                    files.append(os.path.abspath(os.path.join(dir_path, filename)))
+                    abs_file = os.path.abspath(os.path.join(dir_path, filename))
+                    if is_safe_path(abs_file):
+                        files.append(abs_file)
         except Exception as e:
             return jsonify({"error": f"Failed to read directory: {e}"}), 500
             
@@ -179,8 +230,16 @@ def api_convert():
     input_path = data.get("input_path")
     operation = data.get("operation")
     
-    if not input_path or not os.path.exists(input_path):
-        return jsonify({"error": "Input file path is invalid or missing"}), 400
+    if not input_path or not os.path.exists(input_path) or not is_safe_path(input_path):
+        return jsonify({"error": "Input file path is invalid, missing, or outside sandbox"}), 400
+        
+    audio_file = data.get("audio_file")
+    if audio_file and not is_safe_path(audio_file):
+        return jsonify({"error": "Access denied: audio file path is outside sandbox"}), 400
+        
+    sub_file = data.get("sub_file")
+    if sub_file and not is_safe_path(sub_file):
+        return jsonify({"error": "Access denied: subtitle file path is outside sandbox"}), 400
         
     meta = probe_file(input_path)
     duration = meta.get("duration", 0)
@@ -202,6 +261,8 @@ def api_convert():
     custom_output = data.get("output_path")
     
     if custom_output:
+        if not is_safe_output_path(custom_output):
+            return jsonify({"error": "Access denied: custom output path is invalid or outside sandbox"}), 400
         out_dir = os.path.dirname(custom_output)
         if out_dir and not os.path.exists(out_dir):
             try:
@@ -235,9 +296,12 @@ def api_convert():
         elif operation == "thumbnail_grid":
             output_path = os.path.join(out_dir, f"{base_name}_grid.png")
         else:
-            # Conversion / embed
             out_format = data.get("format", ext.lstrip(".") if ext else "mp4")
             output_path = os.path.join(out_dir, f"{base_name}_obsidian.{out_format}")
+
+    # Check output path safety
+    if not is_safe_output_path(output_path):
+        return jsonify({"error": "Access denied: output path is invalid or outside sandbox"}), 400
 
     friendly_encoder = "Standard Pipeline"
     # Build cmd based on operation
@@ -705,6 +769,8 @@ def api_open_folder():
     # Handle filename patterns (e.g. %04d)
     if "%" in os.path.basename(filepath):
         dirpath = os.path.dirname(filepath)
+        if not is_safe_path(dirpath):
+            return jsonify({"error": "Access denied: path is outside sandbox"}), 403
         if os.path.exists(dirpath):
             try:
                 if sys.platform == "win32":
@@ -714,6 +780,9 @@ def api_open_folder():
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
         return jsonify({"error": "Directory does not exist"}), 400
+
+    if not is_safe_path(filepath):
+        return jsonify({"error": "Access denied: path is outside sandbox"}), 403
 
     if not os.path.exists(filepath):
         return jsonify({"error": "Invalid file path"}), 400
@@ -794,7 +863,11 @@ def api_download(session_id, filename):
 @app.route("/api/preview", methods=["GET"])
 def api_preview():
     filepath = request.args.get("filepath")
-    if not filepath or not os.path.exists(filepath):
+    if not filepath:
+        abort(400, description="filepath is required")
+    if not is_safe_path(filepath):
+        abort(403, description="Access denied: file outside sandbox")
+    if not os.path.exists(filepath):
         return "File not found", 404
     try:
         # Enforce absolute path and enable range requests (conditional=True)
@@ -821,8 +894,8 @@ def api_quit():
     
     def shutdown():
         time.sleep(0.5)
-        print("Shutting down Obsidian Codec Engine backend process...")
-        os._exit(0)
+        print("Shutting down Obsidian Codec Engine backend process gracefully...")
+        os.kill(os.getpid(), signal.SIGINT)
         
     threading.Thread(target=shutdown, daemon=True).start()
     return jsonify({"success": True, "message": "Server shutting down."})
@@ -844,4 +917,5 @@ if __name__ == "__main__":
     threading.Thread(target=open_browser, daemon=True).start()
     
     # Run the server
-    app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=False)
+    DEBUG = os.environ.get("OBSIDIAN_CODEC_DEBUG", "0") == "1"
+    app.run(host="127.0.0.1", port=5000, debug=DEBUG, use_reloader=False)
