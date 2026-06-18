@@ -870,8 +870,16 @@ def generate_thumbnail_grid(
 
 
 def get_detected_gpus() -> List[str]:
-    """Returns a list of physical GPU names detected on the system."""
+    """Returns a list of physical GPU names detected on the system.
+
+    Detection strategy (stops at first success):
+      Windows  → wmic  → nvidia-smi
+      macOS    → system_profiler → nvidia-smi
+      Linux    → nvidia-smi → lspci (catches AMD / Intel / other GPUs)
+    """
     gpus: List[str] = []
+
+    # --- Windows: WMIC --------------------------------------------------------
     if sys.platform == "win32":
         try:
             startupinfo = subprocess.STARTUPINFO()
@@ -895,8 +903,29 @@ def get_detected_gpus() -> List[str]:
         except Exception:
             pass
 
+    # --- macOS: system_profiler ------------------------------------------------
+    elif sys.platform == "darwin":
+        try:
+            res = subprocess.run(
+                ["system_profiler", "SPDisplaysDataType"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                timeout=5,
+            )
+            if res.returncode == 0:
+                for line in res.stdout.split("\n"):
+                    stripped = line.strip()
+                    if stripped.startswith("Chipset Model:"):
+                        name = stripped.split(":", 1)[1].strip()
+                        if name:
+                            gpus.append(name)
+        except Exception:
+            pass
+
+    # --- Cross-platform: nvidia-smi -------------------------------------------
     if not gpus:
-        # Fallback to nvidia-smi (cross-platform / Linux or Windows environment fallback)
         try:
             sinfo: Any = None
             if sys.platform == "win32":
@@ -913,6 +942,29 @@ def get_detected_gpus() -> List[str]:
             )
             if res.returncode == 0:
                 gpus = [line.strip() for line in res.stdout.split("\n") if line.strip()]
+        except Exception:
+            pass
+
+    # --- Linux fallback: lspci (catches AMD / Intel / other GPUs) -------------
+    if not gpus and sys.platform not in ("win32", "darwin"):
+        try:
+            res = subprocess.run(
+                ["lspci"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                timeout=3,
+            )
+            if res.returncode == 0:
+                for line in res.stdout.split("\n"):
+                    # Match VGA / 3D / Display controller lines
+                    low = line.lower()
+                    if "vga" in low or "3d controller" in low or "display controller" in low:
+                        # Format: "01:00.0 VGA compatible controller: NVIDIA Corporation ..."
+                        parts = line.split(": ", 1)
+                        if len(parts) > 1:
+                            gpus.append(parts[1].strip())
         except Exception:
             pass
 

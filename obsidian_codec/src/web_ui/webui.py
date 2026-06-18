@@ -795,10 +795,8 @@ def api_open_folder() -> Any:
             return jsonify({"error": "Access denied: path is outside sandbox"}), 403
         if os.path.exists(dirpath):
             try:
-                if sys.platform == "win32":
-                    subprocess.run(["explorer.exe", os.path.normpath(dirpath)])
-                    return jsonify({"success": True})
-                return jsonify({"error": "Not supported on this platform"}), 400
+                _open_in_file_manager(dirpath)
+                return jsonify({"success": True})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
         return jsonify({"error": "Directory does not exist"}), 400
@@ -810,14 +808,35 @@ def api_open_folder() -> Any:
         return jsonify({"error": "Invalid file path"}), 400
 
     try:
-        # Runs Explorer and highlights the file
-        filepath_norm = os.path.normpath(filepath)
-        if sys.platform == "win32":
-            subprocess.run(["explorer.exe", "/select,", filepath_norm])
-            return jsonify({"success": True})
-        return jsonify({"error": "Not supported on this platform"}), 400
+        _open_in_file_manager(filepath, select=True)
+        return jsonify({"success": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _open_in_file_manager(path: str, select: bool = False) -> None:
+    """Open a file or directory in the platform's native file manager.
+
+    Args:
+        path: Absolute path to the file or directory.
+        select: If True, highlight/select the item instead of opening its parent.
+    """
+    path_norm = os.path.normpath(path)
+    if sys.platform == "win32":
+        if select and os.path.isfile(path_norm):
+            subprocess.run(["explorer.exe", "/select,", path_norm])
+        else:
+            subprocess.run(["explorer.exe", path_norm])
+    elif sys.platform == "darwin":
+        if select and os.path.isfile(path_norm):
+            subprocess.run(["open", "-R", path_norm])
+        else:
+            subprocess.run(["open", path_norm])
+    else:
+        # Linux / BSD – xdg-open opens the directory; it cannot select a file,
+        # so we open the parent directory when select is requested.
+        target = os.path.dirname(path_norm) if select and os.path.isfile(path_norm) else path_norm
+        subprocess.run(["xdg-open", target])
 
 
 @app.route("/api/download/<session_id>/<path:filename>", methods=["GET"])
