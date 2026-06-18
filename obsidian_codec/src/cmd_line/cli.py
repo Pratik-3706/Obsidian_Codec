@@ -6,6 +6,7 @@ import time
 import json
 import shutil
 import threading
+from typing import List, Dict, Any, Optional, Tuple, Union
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -26,111 +27,23 @@ from obsidian_codec.src.utils.ffmpeg_utils import (
     get_supported_hw_encoders,
     get_compatible_transcoding_codecs,
     validate_transcoding_combination,
-    escape_ffmpeg_filter_path
+    escape_ffmpeg_filter_path,
+    map_codec_and_build_args,
+    get_input_decoder_args
 )
 
 # Enforce UTF-8 stdout/stderr on Windows to render unicode banners
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding='utf-8')  # type: ignore
+        sys.stderr.reconfigure(encoding='utf-8')  # type: ignore
     except Exception:
         pass
 
 console = Console()
 
 
-def map_codec_and_build_args(vcodec, preset, crf, resolution):
-    """Maps standard codec to hardware codec and returns appropriate arguments."""
-    available_hw = get_supported_hw_encoders()
-    hw_type = "none"
-    
-    # Auto preference: nvenc > qsv > amf > mf
-    for t in ["nvenc", "qsv", "amf", "mf"]:
-        if t in available_hw:
-            hw_type = t
-            break
-            
-    mapped_vcodec = vcodec
-    if vcodec != "copy" and hw_type != "none":
-        if hw_type == "nvenc":
-            mapped_vcodec = "h264_nvenc" if vcodec == "libx264" else "hevc_nvenc" if vcodec == "libx265" else vcodec
-        elif hw_type == "qsv":
-            mapped_vcodec = "h264_qsv" if vcodec == "libx264" else "hevc_qsv" if vcodec == "libx265" else vcodec
-        elif hw_type == "amf":
-            mapped_vcodec = "h264_amf" if vcodec == "libx264" else "hevc_amf" if vcodec == "libx265" else vcodec
-        elif hw_type == "mf":
-            mapped_vcodec = "h264_mf" if vcodec == "libx264" else "hevc_mf" if vcodec == "libx265" else vcodec
-
-    args = ["-c:v", mapped_vcodec]
-    if mapped_vcodec != "copy":
-        if any(x in mapped_vcodec for x in ["h264", "hevc", "vp9", "av1", "x264", "x265"]):
-            args += ["-pix_fmt", "yuv420p"]
-            
-        if resolution != "original":
-            w, h = resolution.split("x")
-            args += ["-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2"]
-            
-        # Quality control
-        if mapped_vcodec in ["h264_nvenc", "hevc_nvenc"]:
-            args += ["-rc:v", "vbr", "-cq:v", str(crf), "-b:v", "0"]
-        elif mapped_vcodec in ["h264_qsv", "hevc_qsv"]:
-            args += ["-global_quality", str(crf)]
-        elif mapped_vcodec in ["h264_amf", "hevc_amf"]:
-            args += ["-rc:v", "cqp", "-qp_i", str(crf), "-qp_p", str(crf)]
-        elif mapped_vcodec in ["h264_mf", "hevc_mf"]:
-            if resolution == "3840x2160":
-                args += ["-b:v", "15M"]
-            elif resolution == "1920x1080":
-                args += ["-b:v", "5M"]
-            elif resolution == "1280x720":
-                args += ["-b:v", "2.5M"]
-            else:
-                args += ["-b:v", "1.2M"]
-        elif mapped_vcodec in ["prores", "prores_ks"]:
-            val = int(crf)
-            if val <= 10:
-                profile = 3 # hq
-            elif val <= 22:
-                profile = 2 # standard
-            elif val <= 35:
-                profile = 1 # lt
-            else:
-                profile = 0 # proxy
-            args += ["-profile:v", str(profile)]
-        else:
-            args += ["-crf", str(crf)]
-            
-        # Preset mapping
-        if preset:
-            if "nvenc" in mapped_vcodec:
-                nv_presets = {
-                    "ultrafast": "p1", "superfast": "p2", "veryfast": "p3",
-                    "faster": "p3", "fast": "p4", "medium": "p4",
-                    "slow": "p5", "slower": "p6", "veryslow": "p7"
-                }
-                args += ["-preset", nv_presets.get(preset, "p4")]
-            elif "qsv" in mapped_vcodec:
-                qsv_presets = {
-                    "ultrafast": "7", "superfast": "6", "veryfast": "5",
-                    "faster": "5", "fast": "4", "medium": "4",
-                    "slow": "3", "slower": "2", "veryslow": "1"
-                }
-                args += ["-preset", qsv_presets.get(preset, "4")]
-            elif "amf" in mapped_vcodec:
-                amf_presets = {
-                    "ultrafast": "speed", "superfast": "speed", "veryfast": "speed",
-                    "faster": "speed", "fast": "speed", "medium": "balanced",
-                    "slow": "quality", "slower": "quality", "veryslow": "quality"
-                }
-                args += ["-preset", amf_presets.get(preset, "balanced")]
-            else:
-                args += ["-preset", preset]
-                
-    return mapped_vcodec, args
-
-
-def print_banner():
+def print_banner() -> None:
     banner = """
  ██████╗ ██████╗ ███████╗██╗██████╗ ██╗ █████╗ ███╗   ██╗     ██████╗ ██████╗ ██████╗ ███████╗ ██████╗
 ██╔═══██╗██╔══██╗██╔════╝██║██╔══██╗██║██╔══██╗████╗  ██║    ██╔════╝██╔═══██╗██╔══██╗██╔════╝██╔════╝
@@ -142,7 +55,7 @@ def print_banner():
     """
     console.print(Panel.fit(banner, border_style="cyan", title="v1.0.0 PRO", subtitle="MIT License"))
 
-def display_file_probe(file_path):
+def display_file_probe(file_path: str) -> Optional[Dict[str, Any]]:
     """Displays ffprobe metadata in a rich layout."""
     info = probe_file(file_path)
     if "error" in info:
@@ -211,7 +124,7 @@ def display_file_probe(file_path):
         
     return info
 
-def run_ffmpeg_with_cli_progress(cmd, duration, output_path):
+def run_ffmpeg_with_cli_progress(cmd: List[str], duration: float, output_path: str) -> None:
     """Runs FFmpeg and renders progress bar inside terminal."""
     job_id = str(uuid.uuid4())
     
@@ -293,28 +206,32 @@ def run_ffmpeg_with_cli_progress(cmd, duration, output_path):
                 console.print(Panel("[bold yellow]⚠ Job was cancelled by user.[/bold yellow]", border_style="yellow"))
                 break
 
-def build_ffmpeg_convert_cmd(input_path, output_path, vcodec, acodec, crf, preset, resolution, audio_track, sub_track, sub_mode, meta):
-    cmd = ["ffmpeg", "-y"]
+def build_ffmpeg_convert_cmd(
+    input_path: str,
+    output_path: str,
+    vcodec: str,
+    acodec: str,
+    crf: Union[int, str],
+    preset: Optional[str],
+    resolution: str,
+    audio_track: Optional[int],
+    sub_track: Optional[int],
+    sub_mode: str,
+    meta: Dict[str, Any]
+) -> List[str]:
+    # Call shared mapping helper
+    v_args, mapped_vcodec, hw_type = map_codec_and_build_args(
+        vcodec=vcodec,
+        preset=preset,
+        crf=crf,
+        resolution=resolution,
+        hw_accel="auto"
+    )
     
-    # GPU decoders
-    available_hw = get_supported_hw_encoders()
-    hw_type = "none"
-    for t in ["nvenc", "qsv", "amf", "mf"]:
-        if t in available_hw:
-            hw_type = t
-            break
-            
-    input_dec_args = []
-    if hw_type in ["nvenc", "qsv"] and meta.get("video_streams"):
-        in_codec = meta["video_streams"][0].get("codec_name", "")
-        if hw_type == "nvenc" and in_codec in ["h264", "hevc", "vp9", "av1"]:
-            input_dec_args = ["-c:v", f"{in_codec}_cuvid"]
-        elif hw_type == "qsv" and in_codec in ["h264", "hevc", "vp9", "av1"]:
-            input_dec_args = ["-c:v", f"{in_codec}_qsv"]
-            
-    cmd += input_dec_args + ["-i", input_path]
+    # Call shared input decoder helper
+    input_dec_args = get_input_decoder_args(hw_type, meta)
     
-    mapped_vcodec, v_args = map_codec_and_build_args(vcodec, preset, crf, resolution)
+    cmd = ["ffmpeg", "-y"] + input_dec_args + ["-i", input_path]
     cmd += v_args
     
     if mapped_vcodec != vcodec:
@@ -340,7 +257,7 @@ def build_ffmpeg_convert_cmd(input_path, output_path, vcodec, acodec, crf, prese
         if sub_mode == "hard":
             escaped_path = escape_ffmpeg_filter_path(input_path)
             sub_vf = f"subtitles='{escaped_path}':si={sub_track}"
-            vf_arg = sub_vf
+            vf_arg: Optional[str] = sub_vf
             for i, arg in enumerate(cmd):
                 if arg == "-vf":
                     cmd[i+1] = f"{cmd[i+1]},{sub_vf}"
@@ -366,7 +283,7 @@ def build_ffmpeg_convert_cmd(input_path, output_path, vcodec, acodec, crf, prese
     cmd.append(output_path)
     return cmd
 
-def check_file_stable(file_path):
+def check_file_stable(file_path: str) -> bool:
     try:
         size1 = os.path.getsize(file_path)
         time.sleep(2)
@@ -375,7 +292,7 @@ def check_file_stable(file_path):
     except Exception:
         return False
 
-def run_command_watch(args):
+def run_command_watch(args: argparse.Namespace) -> None:
     watch_dir = os.path.abspath(args.directory)
     if not os.path.exists(watch_dir):
         console.print(f"[bold red]Watch directory does not exist:[/bold red] {watch_dir}")
@@ -489,7 +406,7 @@ def run_command_watch(args):
     except KeyboardInterrupt:
         console.print("\n[bold yellow]Stopping directory watch mode.[/bold yellow]")
 
-def run_interactive_wizard():
+def run_interactive_wizard() -> None:
     print_banner()
     
     # Input path
@@ -526,7 +443,7 @@ def run_interactive_wizard():
         all_video_codec_choices = ["libx264", "libx265", "libvpx-vp9", "libaom-av1", "copy"]
         all_audio_codec_choices = ["aac", "libmp3lame", "libopus", "flac", "copy", "none"]
 
-        def compatible_codec_choices(selected_container):
+        def compatible_codec_choices(selected_container: str) -> Tuple[List[str], List[str]]:
             video_choices = get_compatible_transcoding_codecs(
                 selected_container, all_video_codec_choices, "video", info, 0
             )
@@ -535,7 +452,7 @@ def run_interactive_wizard():
             )
             return video_choices, audio_choices
 
-        def select_default(choices, preferred):
+        def select_default(choices: List[str], preferred: str) -> str:
             return preferred if preferred in choices else choices[0]
 
         container = Prompt.ask("Select output container", choices=container_choices, default="mp4")
@@ -687,7 +604,7 @@ def run_interactive_wizard():
                 cmd.append(out_path)
                 run_ffmpeg_with_cli_progress(cmd, info['duration'], out_path)
 
-def main():
+def main() -> None:
     # Detect if using new subcommands or legacy arguments
     new_subcommands = {"probe", "convert", "extract", "watch"}
     

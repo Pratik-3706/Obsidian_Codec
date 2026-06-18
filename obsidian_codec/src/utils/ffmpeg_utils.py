@@ -190,13 +190,13 @@ def resolve_transcoding_codec(codec: str, codec_type: str, meta: Optional[Dict[s
 
     if codec_type == "video" and meta.get("video_streams"):
         src_v = meta["video_streams"][0].get("codec_name")
-        return VIDEO_CODEC_MAP.get(src_v, src_v)
+        return str(VIDEO_CODEC_MAP.get(src_v, src_v))
 
     if codec_type == "audio" and meta.get("audio_streams"):
         track_idx = int(audio_track_idx) if audio_track_idx is not None and str(audio_track_idx).isdigit() else 0
         if track_idx < len(meta["audio_streams"]):
             src_a = meta["audio_streams"][track_idx].get("codec_name")
-            return AUDIO_CODEC_MAP.get(src_a, src_a)
+            return str(AUDIO_CODEC_MAP.get(src_a, src_a))
 
     return codec
 
@@ -360,7 +360,10 @@ def run_ffprobe(args: List[str]) -> Dict[str, Any]:
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", check=True, startupinfo=startupinfo, timeout=10)
-        return json.loads(result.stdout)
+        parsed = json.loads(result.stdout)
+        if isinstance(parsed, dict):
+            return parsed
+        return {}
     except subprocess.CalledProcessError as e:
         print(f"ffprobe error: {e.stderr}", file=sys.stderr)
         return {}
@@ -500,18 +503,19 @@ def run_ffmpeg_subprocess(job_id: str, cmd: List[str], total_duration: float, ou
 
             # Thread to read stderr logs so they don't block and we can show them to user
             stderr_lines = ["Command: " + " ".join(cmd)]
-            def read_stderr():
-                for line in proc.stderr:
-                    stripped = line.strip()
-                    if stripped:
-                        stderr_lines.append(stripped)
-                        # Limit log buffer size
-                        if len(stderr_lines) > 200:
-                            stderr_lines.pop(0)
-                        with JOBS_LOCK:
-                            if job_id in ACTIVE_JOBS:
-                                ACTIVE_JOBS[job_id]['log'] = list(stderr_lines)
-                        save_jobs_to_disk()
+            def read_stderr() -> None:
+                if proc.stderr:
+                    for line in proc.stderr:
+                        stripped = line.strip()
+                        if stripped:
+                            stderr_lines.append(stripped)
+                            # Limit log buffer size
+                            if len(stderr_lines) > 200:
+                                stderr_lines.pop(0)
+                            with JOBS_LOCK:
+                                if job_id in ACTIVE_JOBS:
+                                    ACTIVE_JOBS[job_id]['log'] = list(stderr_lines)
+                            save_jobs_to_disk()
             
             stderr_thread = threading.Thread(target=read_stderr, daemon=True)
             stderr_thread.start()
@@ -525,11 +529,12 @@ def run_ffmpeg_subprocess(job_id: str, cmd: List[str], total_duration: float, ou
             
             progress_data = {}
             
-            for line in proc.stdout:
-                # We are parsing key=value pairs
-                if "=" in line:
-                    key, val = line.strip().split("=", 1)
-                    progress_data[key] = val
+            if proc.stdout:
+                for line in proc.stdout:
+                    # We are parsing key=value pairs
+                    if "=" in line:
+                        key, val = line.strip().split("=", 1)
+                        progress_data[key] = val
                     
                     # We update on 'progress=continue' or when it completes
                     if key == "progress":
@@ -760,13 +765,13 @@ def get_detected_gpus() -> List[str]:
     if not gpus:
         # Fallback to nvidia-smi (cross-platform / Linux or Windows environment fallback)
         try:
-            startupinfo = None
+            sinfo: Any = None
             if sys.platform == "win32":
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                sinfo = subprocess.STARTUPINFO()
+                sinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             res = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", startupinfo=startupinfo, timeout=3
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", startupinfo=sinfo, timeout=3
             )
             if res.returncode == 0:
                 gpus = [line.strip() for line in res.stdout.split('\n') if line.strip()]
@@ -800,10 +805,135 @@ def validate_transcoding_combination(container: str, vcodec: str, acodec: str, m
             err_msg = f"Incompatible combination: Video Codec ({check_v}) is incompatible with the {container_lower.upper()} container. "
         else:
             err_msg = f"Incompatible combination: Audio Codec ({check_a}) is incompatible with the {container_lower.upper()} container. "
-        err_msg += rules["notes"]
+        err_msg += str(rules["notes"])
         return False, err_msg
 
     return True, ""
+
+
+def get_input_decoder_args(hw_type: str, meta: Optional[Dict[str, Any]]) -> List[str]:
+    """Returns hardware accelerated input decoder arguments if supported."""
+    if not meta or hw_type not in ["nvenc", "qsv"]:
+        return []
+    if not meta.get("video_streams"):
+        return []
+    in_codec = meta["video_streams"][0].get("codec_name", "")
+    if hw_type == "nvenc":
+        if in_codec in ["h264", "hevc", "vp9", "av1"]:
+            return ["-c:v", f"{in_codec}_cuvid"]
+    elif hw_type == "qsv":
+        if in_codec in ["h264", "hevc", "vp9", "av1"]:
+            return ["-c:v", f"{in_codec}_qsv"]
+    return []
+
+
+def map_codec_and_build_args(
+    vcodec: str,
+    preset: Optional[str],
+    crf: Union[int, str],
+    resolution: str,
+    hw_accel: str = "auto",
+    bitrate: Optional[str] = None
+) -> Tuple[List[str], str, str]:
+    """Maps standard codec to hardware codec and returns appropriate arguments, mapped codec, and hardware type."""
+    available_hw = get_supported_hw_encoders()
+    hw_type = "none"
+    
+    if vcodec != "copy" and hw_accel != "none":
+        if hw_accel == "auto":
+            # Auto preference: nvenc > qsv > amf > mf
+            for t in ["nvenc", "qsv", "amf", "mf"]:
+                if t in available_hw:
+                    hw_type = t
+                    break
+        else:
+            if hw_accel in available_hw:
+                hw_type = hw_accel
+
+    mapped_vcodec = vcodec
+    if vcodec != "copy" and hw_type != "none":
+        if hw_type == "nvenc":
+            mapped_vcodec = "h264_nvenc" if vcodec == "libx264" else "hevc_nvenc" if vcodec == "libx265" else vcodec
+        elif hw_type == "qsv":
+            mapped_vcodec = "h264_qsv" if vcodec == "libx264" else "hevc_qsv" if vcodec == "libx265" else vcodec
+        elif hw_type == "amf":
+            mapped_vcodec = "h264_amf" if vcodec == "libx264" else "hevc_amf" if vcodec == "libx265" else vcodec
+        elif hw_type == "mf":
+            mapped_vcodec = "h264_mf" if vcodec == "libx264" else "hevc_mf" if vcodec == "libx265" else vcodec
+
+    args = ["-c:v", mapped_vcodec]
+    if mapped_vcodec != "copy":
+        if any(x in mapped_vcodec for x in ["h264", "hevc", "vp9", "av1", "x264", "x265"]):
+            args += ["-pix_fmt", "yuv420p"]
+            
+        if resolution != "original":
+            w, h = resolution.split("x")
+            args += ["-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2"]
+            
+        # Quality/Bitrate control
+        if bitrate:
+            args += ["-b:v", bitrate]
+        elif mapped_vcodec in ["h264_nvenc", "hevc_nvenc"]:
+            args += ["-rc:v", "vbr", "-cq:v", str(crf), "-b:v", "0"]
+        elif mapped_vcodec in ["h264_qsv", "hevc_qsv"]:
+            args += ["-global_quality", str(crf)]
+        elif mapped_vcodec in ["h264_amf", "hevc_amf"]:
+            args += ["-rc:v", "cqp", "-qp_i", str(crf), "-qp_p", str(crf)]
+        elif mapped_vcodec in ["h264_mf", "hevc_mf"]:
+            if resolution == "3840x2160":
+                args += ["-b:v", "15M"]
+            elif resolution == "1920x1080":
+                args += ["-b:v", "5M"]
+            elif resolution == "1280x720":
+                args += ["-b:v", "2.5M"]
+            else:
+                args += ["-b:v", "1.2M"]
+        elif "prores" in mapped_vcodec:
+            val = int(crf)
+            if val <= 10:
+                profile = 3 # hq
+            elif val <= 22:
+                profile = 2 # standard
+            elif val <= 35:
+                profile = 1 # lt
+            else:
+                profile = 0 # proxy
+            args += ["-profile:v", str(profile)]
+        elif mapped_vcodec in ["mpeg4", "libxvid", "libvpx"]:
+            val = int(crf)
+            qv = max(1, min(31, int(1 + (val / 51.0) * 30.0)))
+            args += ["-q:v", str(qv)]
+        else:
+            args += ["-crf", str(crf)]
+            
+        # Preset mapping
+        if preset:
+            if "nvenc" in mapped_vcodec:
+                nv_presets = {
+                    "ultrafast": "p1", "superfast": "p2", "veryfast": "p3",
+                    "faster": "p3", "fast": "p4", "medium": "p4",
+                    "slow": "p5", "slower": "p6", "veryslow": "p7"
+                }
+                args += ["-preset", nv_presets.get(preset, "p4")]
+            elif "qsv" in mapped_vcodec:
+                qsv_presets = {
+                    "ultrafast": "veryfast", "superfast": "veryfast", "veryfast": "veryfast",
+                    "faster": "faster", "fast": "fast", "medium": "balanced",
+                    "slow": "quality", "slower": "veryslow", "veryslow": "veryslow"
+                }
+                args += ["-preset", qsv_presets.get(preset, "balanced")]
+            elif "amf" in mapped_vcodec:
+                amf_presets = {
+                    "ultrafast": "speed", "superfast": "speed", "veryfast": "speed",
+                    "faster": "speed", "fast": "speed", "medium": "balanced",
+                    "slow": "quality", "slower": "quality", "veryslow": "quality"
+                }
+                args += ["-preset", amf_presets.get(preset, "balanced")]
+            else:
+                args += ["-preset", preset]
+
+    return args, mapped_vcodec, hw_type
+
 
 # Load persisted jobs on startup
 load_jobs_from_disk()

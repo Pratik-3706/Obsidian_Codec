@@ -13,6 +13,7 @@ import zipfile
 import re
 import glob
 import webbrowser
+from typing import List, Dict, Any, Optional, Tuple, Union
 from flask import Flask, request, jsonify, render_template, send_from_directory, send_file, abort, Response
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -41,7 +42,9 @@ from obsidian_codec.src.utils.ffmpeg_utils import (
     is_safe_output_path,
     OUTPUT_DIR,
     save_jobs_to_disk,
-    escape_ffmpeg_filter_path
+    escape_ffmpeg_filter_path,
+    map_codec_and_build_args,
+    get_input_decoder_args
 )
 
 app = Flask(
@@ -87,7 +90,7 @@ limiter = Limiter(
 )
 
 @app.before_request
-def security_checks():
+def security_checks() -> None:
     # 1. DNS Rebinding Protection
     host = request.headers.get("Host", "")
     host_name = host.split(":")[0]
@@ -111,10 +114,10 @@ def security_checks():
             abort(403, description="Invalid CSRF token")
 
 @app.route("/api/csrf", methods=["GET"])
-def get_csrf():
+def get_csrf() -> Any:
     return jsonify({"token": app.config["CSRF_TOKEN"]})
 
-def get_session_dir(session_id):
+def get_session_dir(session_id: Optional[str]) -> str:
     if not session_id:
         return TEMP_DIR
     safe_id = "".join([c for c in session_id if c.isalnum() or c in "-_"]).strip()
@@ -127,15 +130,15 @@ def get_session_dir(session_id):
     return session_dir
 
 @app.route("/")
-def index():
+def index() -> Any:
     return render_template("index.html")
 
 @app.route("/assets/<path:filename>")
-def serve_assets(filename):
+def serve_assets(filename: str) -> Any:
     return send_from_directory("assets", filename)
 
 @app.route("/api/analyze", methods=["POST"])
-def api_analyze():
+def api_analyze() -> Any:
     data = request.json or {}
     filepath_input = data.get("filepath")
     if not filepath_input:
@@ -197,14 +200,14 @@ def api_analyze():
         return jsonify(info)
 
 @app.route("/api/hw-encoders", methods=["GET"])
-def api_hw_encoders():
+def api_hw_encoders() -> Any:
     return jsonify({
         "supported": get_supported_hw_encoders(),
         "gpus": get_detected_gpus()
     })
 
 @app.route("/api/upload", methods=["POST"])
-def api_upload():
+def api_upload() -> Any:
     ensure_temp_dir()
     
     session_id = request.form.get("session_id")
@@ -251,7 +254,7 @@ def api_upload():
     return jsonify({"status": "uploading", "chunk": chunk_number})
 
 @app.route("/api/convert", methods=["POST"])
-def api_convert():
+def api_convert() -> Any:
     ensure_temp_dir()
     data = request.json or {}
     
@@ -343,126 +346,27 @@ def api_convert():
             video_codec = data.get("video_codec", "libx264")
             audio_codec = data.get("audio_codec", "aac")
             hw_accel = data.get("hw_accel", "auto")
-            
-            # Map video codec to hardware encoder if applicable
-            mapped_vcodec = video_codec
-            hw_type = "none"
-            if video_codec != "copy" and hw_accel != "none":
-                available_hw = get_supported_hw_encoders()
-                hw_type = hw_accel
-                if hw_accel == "auto":
-                    # Preference: nvenc > qsv > amf > mf
-                    for t in ["nvenc", "qsv", "amf", "mf"]:
-                        if t in available_hw:
-                            hw_type = t
-                            break
-                    if hw_type == "auto":
-                        hw_type = "none" # Fallback to software CPU
-                        
-                # Map standard codec to hw encoder
-                if hw_type == "nvenc":
-                    mapped_vcodec = "h264_nvenc" if video_codec == "libx264" else "hevc_nvenc" if video_codec == "libx265" else video_codec
-                elif hw_type == "qsv":
-                    mapped_vcodec = "h264_qsv" if video_codec == "libx264" else "hevc_qsv" if video_codec == "libx265" else video_codec
-                elif hw_type == "amf":
-                    mapped_vcodec = "h264_amf" if video_codec == "libx264" else "hevc_amf" if video_codec == "libx265" else video_codec
-                elif hw_type == "mf":
-                    mapped_vcodec = "h264_mf" if video_codec == "libx264" else "hevc_mf" if video_codec == "libx265" else video_codec
-                    
-            # Determine input hardware decoder prefix
-            input_dec_args = []
-            if hw_type in ["nvenc", "qsv"] and meta.get("video_streams"):
-                in_codec = meta["video_streams"][0].get("codec_name", "")
-                if hw_type == "nvenc":
-                    if in_codec in ["h264", "hevc", "vp9", "av1"]:
-                        input_dec_args = ["-c:v", f"{in_codec}_cuvid"]
-                elif hw_type == "qsv":
-                    if in_codec in ["h264", "hevc", "vp9", "av1"]:
-                        input_dec_args = ["-c:v", f"{in_codec}_qsv"]
-            
+            resolution = data.get("resolution", "original")
+            bitrate = data.get("video_bitrate")
+            crf = data.get("crf", 23)
+            preset = data.get("preset")
+
+            # Map video codec and build args using shared helper
+            v_args, mapped_vcodec, hw_type = map_codec_and_build_args(
+                vcodec=video_codec,
+                preset=preset,
+                crf=crf,
+                resolution=resolution,
+                hw_accel=hw_accel,
+                bitrate=bitrate
+            )
+
+            # Get input decoder arguments using shared helper
+            input_dec_args = get_input_decoder_args(hw_type, meta)
+
             cmd = ["ffmpeg", "-y"] + input_dec_args + ["-i", input_path]
-            cmd += ["-c:v", mapped_vcodec]
-            
-            if video_codec != "copy":
-                # Enforce highly compatible pixel format for hardware/software transcoding compatibility
-                if any(x in mapped_vcodec for x in ["h264", "hevc", "vp9", "av1", "x264", "x265"]):
-                    cmd += ["-pix_fmt", "yuv420p"]
-                    
-                # Resolution
-                resolution = data.get("resolution", "original")
-                if resolution != "original":
-                    w, h = resolution.split("x")
-                    cmd += ["-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2"]
-                
-                # Bitrate/CRF mapping
-                bitrate = data.get("video_bitrate")
-                crf = data.get("crf", 23)
-                
-                if bitrate:
-                    cmd += ["-b:v", bitrate]
-                elif mapped_vcodec in ["h264_nvenc", "hevc_nvenc"]:
-                    cmd += ["-rc:v", "vbr", "-cq:v", str(crf), "-b:v", "0"]
-                elif mapped_vcodec in ["h264_qsv", "hevc_qsv"]:
-                    cmd += ["-global_quality", str(crf)]
-                elif mapped_vcodec in ["h264_amf", "hevc_amf"]:
-                    cmd += ["-rc:v", "cqp", "-qp_i", str(crf), "-qp_p", str(crf)]
-                elif mapped_vcodec in ["h264_mf", "hevc_mf"]:
-                    # MF doesn't support quality mapping, so map CRF to bitrate
-                    if resolution == "3840x2160":
-                        cmd += ["-b:v", "15M"]
-                    elif resolution == "1920x1080":
-                        cmd += ["-b:v", "5M"]
-                    elif resolution == "1280x720":
-                        cmd += ["-b:v", "2.5M"]
-                    else:
-                        cmd += ["-b:v", "1.2M"]
-                elif "prores" in mapped_vcodec:
-                    # Map CRF 0-51 to ProRes profile (0 = proxy, 1 = lt, 2 = standard, 3 = hq)
-                    val = int(crf)
-                    if val <= 10:
-                        profile = 3 # hq
-                    elif val <= 22:
-                        profile = 2 # standard
-                    elif val <= 35:
-                        profile = 1 # lt
-                    else:
-                        profile = 0 # proxy
-                    cmd += ["-profile:v", str(profile)]
-                elif mapped_vcodec in ["mpeg4", "libxvid", "libvpx"]:
-                    # Map CRF 0-51 to -q:v 1-31 (1 is best quality)
-                    val = int(crf)
-                    qv = max(1, min(31, int(1 + (val / 51.0) * 30.0)))
-                    cmd += ["-q:v", str(qv)]
-                else:
-                    cmd += ["-crf", str(crf)]
-                    
-                # Preset mapping
-                preset = data.get("preset")
-                if preset:
-                    if "nvenc" in mapped_vcodec:
-                        nv_presets = {
-                            "ultrafast": "p1", "superfast": "p2", "veryfast": "p3",
-                            "faster": "p3", "fast": "p4", "medium": "p4",
-                            "slow": "p5", "slower": "p6", "veryslow": "p7"
-                        }
-                        cmd += ["-preset", nv_presets.get(preset, "p4")]
-                    elif "qsv" in mapped_vcodec:
-                        qsv_presets = {
-                            "ultrafast": "7", "superfast": "6", "veryfast": "5",
-                            "faster": "5", "fast": "4", "medium": "4",
-                            "slow": "3", "slower": "2", "veryslow": "1"
-                        }
-                        cmd += ["-preset", qsv_presets.get(preset, "4")]
-                    elif "amf" in mapped_vcodec:
-                        amf_presets = {
-                            "ultrafast": "speed", "superfast": "speed", "veryfast": "speed",
-                            "faster": "speed", "fast": "speed", "medium": "balanced",
-                            "slow": "quality", "slower": "quality", "veryslow": "quality"
-                        }
-                        cmd += ["-preset", amf_presets.get(preset, "balanced")]
-                    else:
-                        cmd += ["-preset", preset]
-            
+            cmd += v_args
+
             if audio_codec == "none":
                 cmd += ["-an"]
             else:
@@ -494,7 +398,7 @@ def api_convert():
                     sub_vf = f"subtitles='{escaped_path}':si={sub_idx}"
                     # Find if we already have -vf scale
                     # Subtitles filter must run after scaling
-                    vf_arg = sub_vf
+                    vf_arg: Optional[str] = sub_vf
                     for i, arg in enumerate(cmd):
                         if arg == "-vf":
                             cmd[i+1] = f"{cmd[i+1]},{sub_vf}"
@@ -668,8 +572,8 @@ def api_convert():
                             })
                     save_jobs_to_disk()
             
-            t = threading.Thread(target=run_grid_generation, daemon=True)
-            t.start()
+            t_grid = threading.Thread(target=run_grid_generation, daemon=True)
+            t_grid.start()
             return jsonify({"job_id": job_id})
             
         elif operation == "embed_audio":
@@ -735,14 +639,14 @@ def api_convert():
     return jsonify({"job_id": job_id})
 
 @app.route("/api/status/<job_id>", methods=["GET"])
-def api_status(job_id):
+def api_status(job_id: str) -> Any:
     status = get_job_status(job_id)
     if not status:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(status)
 
 @app.route("/api/job-frame/<job_id>", methods=["GET"])
-def api_job_frame(job_id):
+def api_job_frame(job_id: str) -> Any:
     with JOBS_LOCK:
         job = ACTIVE_JOBS.get(job_id)
         if not job:
@@ -782,7 +686,7 @@ def api_job_frame(job_id):
     ]
     
     try:
-        startupinfo = None
+        startupinfo: Any = None
         if sys.platform == "win32":
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -801,14 +705,14 @@ def api_job_frame(job_id):
         return str(e), 500
 
 @app.route("/api/cancel/<job_id>", methods=["POST"])
-def api_cancel(job_id):
+def api_cancel(job_id: str) -> Any:
     success, msg = cancel_job(job_id)
     if not success:
         return jsonify({"error": msg}), 400
     return jsonify({"status": "cancelled", "message": msg})
 
 @app.route("/api/open-folder", methods=["POST"])
-def api_open_folder():
+def api_open_folder() -> Any:
     data = request.json or {}
     filepath = data.get("filepath")
     if not filepath:
@@ -846,7 +750,7 @@ def api_open_folder():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/download/<session_id>/<path:filename>", methods=["GET"])
-def api_download(session_id, filename):
+def api_download(session_id: str, filename: str) -> Any:
     session_dir = get_session_dir(session_id)
     
     # Check if this is a pattern representation (e.g., %04d)
@@ -873,7 +777,7 @@ def api_download(session_id, filename):
         response = send_file(zip_path, as_attachment=True, download_name=zip_name)
         
         @response.call_on_close
-        def cleanup_zip_and_files():
+        def cleanup_zip_and_files() -> None:
             try:
                 if os.path.exists(zip_path):
                     os.unlink(zip_path)
@@ -894,7 +798,7 @@ def api_download(session_id, filename):
     response = send_file(file_path, as_attachment=True)
     
     @response.call_on_close
-    def cleanup_file():
+    def cleanup_file() -> None:
         try:
             if os.path.exists(file_path):
                 os.unlink(file_path)
@@ -904,7 +808,7 @@ def api_download(session_id, filename):
     return response
 
 @app.route("/api/preview", methods=["GET"])
-def api_preview():
+def api_preview() -> Any:
     filepath = request.args.get("filepath")
     if not filepath:
         abort(400, description="filepath is required")
@@ -919,7 +823,7 @@ def api_preview():
         return str(e), 500
 
 @app.route("/api/cleanup-session", methods=["POST"])
-def api_cleanup_session():
+def api_cleanup_session() -> Any:
     session_id = request.form.get("session_id")
     if not session_id:
         try:
@@ -939,10 +843,10 @@ def api_cleanup_session():
     return jsonify({"success": True, "message": "Session cleanup successful."})
 
 @app.route("/api/quit", methods=["POST"])
-def api_quit():
+def api_quit() -> Any:
     cleanup_temp_dir()
     
-    def shutdown():
+    def shutdown() -> None:
         time.sleep(0.5)
         print("Shutting down Obsidian Codec Engine backend process gracefully...")
         os.kill(os.getpid(), signal.SIGINT)
@@ -958,7 +862,7 @@ def main() -> None:
     print("  Obsidian_Codec WebUI starting on http://127.0.0.1:5000")
     print("===================================================")
     
-    def open_browser():
+    def open_browser() -> None:
         time.sleep(1.0)
         webbrowser.open("http://127.0.0.1:5000")
         

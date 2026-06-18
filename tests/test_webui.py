@@ -76,5 +76,41 @@ class TestWebUI(unittest.TestCase):
             self.assertTrue(data["success"])
             mock_rmtree.assert_called_once()
 
+    @patch('obsidian_codec.src.web_ui.webui.is_safe_path')
+    @patch('obsidian_codec.src.web_ui.webui.is_safe_output_path')
+    @patch('obsidian_codec.src.web_ui.webui.probe_file')
+    @patch('obsidian_codec.src.web_ui.webui.start_conversion_thread')
+    @patch('os.path.exists')
+    def test_api_convert_route(self, mock_exists, mock_start_thread, mock_probe, mock_safe_out, mock_safe):
+        mock_safe.return_value = True
+        mock_safe_out.return_value = True
+        mock_exists.return_value = True
+        mock_probe.return_value = {
+            "duration": 60.0,
+            "format_name": "mp4",
+            "video_streams": [{"codec_name": "h264", "index": 0}],
+            "audio_streams": [{"codec_name": "aac", "index": 1}]
+        }
+        mock_start_thread.return_value = MagicMock()
+
+        headers = {"X-CSRF-Token": self.csrf_token}
+        payload = {
+            "session_id": "test-session",
+            "input_path": "test.mp4",
+            "operation": "convert",
+            "video_codec": "libx264",
+            "audio_codec": "aac",
+            "format": "mp4",
+            "crf": "23",
+            "preset": "medium",
+            "resolution": "original",
+            "hw_accel": "none"
+        }
+
+        response = self.client.post('/api/convert', json=payload, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertIn("job_id", data)
+
 if __name__ == '__main__':
     unittest.main()
