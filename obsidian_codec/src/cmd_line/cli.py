@@ -939,6 +939,15 @@ def main() -> None:
             crf_val = args.crf or "23"
             preset_val = args.preset or "medium"
 
+            if preset_val == "youtube":
+                vcodec = "libx264"
+                acodec = "aac"
+                crf_val = "21"
+                preset_val = "medium"
+                console.print(
+                    "[bold green]YouTube Preset Active:[/bold green] H.264, AAC, CRF 21, Medium preset, original resolution."
+                )
+
             cmd = build_ffmpeg_convert_cmd(
                 args.input,
                 output_path,
