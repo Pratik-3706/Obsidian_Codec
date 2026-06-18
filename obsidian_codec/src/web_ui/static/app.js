@@ -801,24 +801,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- 8. Cancellation ---
   btnCancelProcess.addEventListener('click', async () => {
-    if (!activeJobId) return;
-    btnCancelProcess.disabled = true;
-    btnCancelProcess.textContent = "Stopping...";
-    
-    try {
-      await fetch(`/api/cancel/${activeJobId}`, { method: 'POST' });
-    } catch (err) {
-      console.error("Cancellation request failed:", err);
-    } finally {
-      btnCancelProcess.disabled = false;
-      btnCancelProcess.textContent = "ABORT PIPELINE";
-      stopPolling();
-      stopProcessPreview();
-      isBatchMode = false; // Cancel remaining batch conversions
-      processingModal.classList.add('hidden');
-      document.body.classList.remove('modal-open');
-      document.documentElement.classList.remove('modal-open');
+    if (activeJobId) {
+      btnCancelProcess.disabled = true;
+      btnCancelProcess.textContent = "Stopping...";
+      
+      try {
+        await fetch(`/api/cancel/${activeJobId}`, { method: 'POST' });
+      } catch (err) {
+        console.error("Cancellation request failed:", err);
+      } finally {
+        btnCancelProcess.disabled = false;
+        btnCancelProcess.textContent = "ABORT PIPELINE";
+      }
     }
+    
+    stopPolling();
+    stopProcessPreview();
+    isBatchMode = false; // Cancel remaining batch conversions
+    processingModal.classList.add('hidden');
+    document.body.classList.remove('modal-open');
+    document.documentElement.classList.remove('modal-open');
   });
 
   // --- 9. Completion Actions ---

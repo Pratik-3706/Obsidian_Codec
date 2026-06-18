@@ -43,7 +43,7 @@ def get_supported_hw_encoders():
     try:
         res = subprocess.run(
             ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc", "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo, timeout=3
         )
         if res.returncode == 0:
             supported.append("nvenc")
@@ -54,7 +54,7 @@ def get_supported_hw_encoders():
     try:
         res = subprocess.run(
             ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc", "-frames:v", "1", "-c:v", "h264_qsv", "-f", "null", "-"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo, timeout=3
         )
         if res.returncode == 0:
             supported.append("qsv")
@@ -65,7 +65,7 @@ def get_supported_hw_encoders():
     try:
         res = subprocess.run(
             ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc", "-frames:v", "1", "-c:v", "h264_amf", "-f", "null", "-"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo, timeout=3
         )
         if res.returncode == 0:
             supported.append("amf")
@@ -76,7 +76,7 @@ def get_supported_hw_encoders():
     try:
         res = subprocess.run(
             ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc", "-frames:v", "1", "-c:v", "h264_mf", "-f", "null", "-"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo, timeout=3
         )
         if res.returncode == 0:
             supported.append("mf")
@@ -153,7 +153,7 @@ def run_ffprobe(args):
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", check=True, startupinfo=startupinfo)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", check=True, startupinfo=startupinfo, timeout=10)
         return json.loads(result.stdout)
     except subprocess.CalledProcessError as e:
         print(f"ffprobe error: {e.stderr}", file=sys.stderr)
@@ -525,7 +525,7 @@ def get_detected_gpus():
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             res = subprocess.run(
                 ["wmic", "path", "win32_VideoController", "get", "name"],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", startupinfo=startupinfo
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", startupinfo=startupinfo, timeout=3
             )
             if res.returncode == 0:
                 lines = [line.strip() for line in res.stdout.split('\n') if line.strip()]
@@ -546,7 +546,7 @@ def get_detected_gpus():
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             res = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", startupinfo=startupinfo
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", startupinfo=startupinfo, timeout=3
             )
             if res.returncode == 0:
                 gpus = [line.strip() for line in res.stdout.split('\n') if line.strip()]
