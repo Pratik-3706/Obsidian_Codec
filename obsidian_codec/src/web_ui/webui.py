@@ -52,6 +52,9 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 # Enable template auto-reload
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 
+# Disable request body size limits to support uploading extremely large media files
+app.config["MAX_CONTENT_LENGTH"] = None
+
 
 def get_or_create_csrf_token() -> str:
     ensure_temp_dir()
@@ -186,6 +189,7 @@ def index() -> Any:
 
 
 @app.route("/assets/<path:filename>")
+@limiter.exempt
 def serve_assets(filename: str) -> Any:
     return send_from_directory("assets", filename)
 
@@ -253,6 +257,7 @@ def api_hw_encoders() -> Any:
 
 
 @app.route("/api/upload", methods=["POST"])
+@limiter.exempt
 def api_upload() -> Any:
     ensure_temp_dir()
 
@@ -714,6 +719,7 @@ def api_convert() -> Any:
 
 
 @app.route("/api/status/<job_id>", methods=["GET"])
+@limiter.exempt
 def api_status(job_id: str) -> Any:
     status = get_job_status(job_id)
     if not status:
@@ -722,6 +728,7 @@ def api_status(job_id: str) -> Any:
 
 
 @app.route("/api/job-frame/<job_id>", methods=["GET"])
+@limiter.exempt
 def api_job_frame(job_id: str) -> Any:
     with JOBS_LOCK:
         job = ACTIVE_JOBS.get(job_id)
@@ -814,6 +821,7 @@ def api_open_folder() -> Any:
 
 
 @app.route("/api/download/<session_id>/<path:filename>", methods=["GET"])
+@limiter.exempt
 def api_download(session_id: str, filename: str) -> Any:
     session_dir = get_session_dir(session_id)
 
@@ -873,6 +881,7 @@ def api_download(session_id: str, filename: str) -> Any:
 
 
 @app.route("/api/preview", methods=["GET"])
+@limiter.exempt
 def api_preview() -> Any:
     filepath = request.args.get("filepath")
     if not filepath:

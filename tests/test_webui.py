@@ -131,6 +131,14 @@ class TestWebUI(unittest.TestCase):
         response = self.client.post("/api/analyze", json={"filepath": "test.mp4"}, headers=headers)
         self.assertEqual(response.status_code, 403)
 
+    def test_api_upload_rate_limit_exemption(self):
+        # We will make 125 requests to the exempt `/api/upload` endpoint.
+        # Since it is exempt, none of them should return 429 (they should return 400 instead).
+        headers = {"X-CSRF-Token": self.csrf_token}
+        for _ in range(125):
+            response = self.client.post("/api/upload", data={}, headers=headers)
+            self.assertEqual(response.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()
