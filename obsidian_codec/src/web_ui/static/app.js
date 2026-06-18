@@ -397,6 +397,7 @@ document.addEventListener('DOMContentLoaded', () => {
           document.querySelectorAll('input[name="audio-stream-radio"]').forEach(rad => {
             rad.closest('.stream-item').classList.toggle('active', rad.checked);
           });
+          updateCodecOptionsForFormat();
           checkTranscodingCompatibility();
         });
         audioStreamsList.appendChild(div);
@@ -452,6 +453,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('analysis-placeholder').classList.add('hidden');
     document.getElementById('analysis-results').classList.remove('hidden');
     
+    updateCodecOptionsForFormat();
     checkTranscodingCompatibility();
     settingsPanel.scrollIntoView({ behavior: 'smooth' });
   }
@@ -535,6 +537,94 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  const CODEC_OPTION_CATALOG = {
+    'conv-vcodec': Array.from(document.getElementById('conv-vcodec').options).map(option => ({
+      value: option.value,
+      text: option.textContent
+    })),
+    'conv-acodec': Array.from(document.getElementById('conv-acodec').options).map(option => ({
+      value: option.value,
+      text: option.textContent
+    }))
+  };
+
+  function selectedAudioStream() {
+    if (!probedData || !probedData.audio_streams || probedData.audio_streams.length === 0) {
+      return null;
+    }
+
+    const checkedAudio = document.querySelector('input[name="audio-stream-radio"]:checked');
+    return checkedAudio
+      ? probedData.audio_streams.find(stream => stream.index == checkedAudio.value)
+      : probedData.audio_streams[0];
+  }
+
+  function codecValueForCompatibility(codec, type) {
+    if (codec !== 'copy') {
+      return codec;
+    }
+
+    if (type === 'video' && probedData && probedData.video_streams && probedData.video_streams.length > 0) {
+      return mapSourceCodecToOption(probedData.video_streams[0].codec_name, 'video');
+    }
+
+    const audioStream = selectedAudioStream();
+    if (type === 'audio' && audioStream) {
+      return mapSourceCodecToOption(audioStream.codec_name, 'audio');
+    }
+
+    return codec;
+  }
+
+  function isCodecOptionCompatible(format, codec, type) {
+    const rules = COMPATIBILITY_MATRIX[format];
+    const allowedCodecs = rules ? rules[type] : null;
+
+    if (!allowedCodecs) {
+      return true;
+    }
+
+    return allowedCodecs.includes(codecValueForCompatibility(codec, type));
+  }
+
+  function rebuildCodecSelect(selectId, type, preferredDefault) {
+    const select = document.getElementById(selectId);
+    const format = document.getElementById('conv-format').value;
+    const currentValue = select.value;
+    const compatibleOptions = CODEC_OPTION_CATALOG[selectId].filter(option =>
+      isCodecOptionCompatible(format, option.value, type)
+    );
+
+    select.innerHTML = '';
+    if (compatibleOptions.length === 0) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = `No compatible ${type} encoders`;
+      select.appendChild(option);
+      return;
+    }
+
+    compatibleOptions.forEach(optionData => {
+      const option = document.createElement('option');
+      option.value = optionData.value;
+      option.textContent = optionData.text;
+      select.appendChild(option);
+    });
+
+    if (compatibleOptions.some(option => option.value === currentValue)) {
+      select.value = currentValue;
+    } else if (compatibleOptions.some(option => option.value === preferredDefault)) {
+      select.value = preferredDefault;
+    } else if (compatibleOptions.length > 0) {
+      select.value = compatibleOptions[0].value;
+    }
+  }
+
+  function updateCodecOptionsForFormat() {
+    rebuildCodecSelect('conv-vcodec', 'video', 'libx264');
+    rebuildCodecSelect('conv-acodec', 'audio', 'aac');
+  }
+
   function checkTranscodingCompatibility() {
     const format = document.getElementById('conv-format').value;
     let videoCodec = document.getElementById('conv-vcodec').value;
@@ -545,18 +635,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (!warningBanner || !warningText) return;
 
-    if (videoCodec === 'copy' && probedData && probedData.video_streams && probedData.video_streams.length > 0) {
-      videoCodec = mapSourceCodecToOption(probedData.video_streams[0].codec_name, 'video');
+    if (!videoCodec || !audioCodec) {
+      const missingType = !videoCodec && !audioCodec ? 'video or audio encoders' : !videoCodec ? 'video encoders' : 'audio encoders';
+      warningText.textContent = `No compatible ${missingType} are available for the selected container. Choose a different target format.`;
+      warningBanner.classList.remove('hidden');
+      btnStartProcess.disabled = true;
+      btnStartProcess.style.opacity = '0.5';
+      btnStartProcess.style.cursor = 'not-allowed';
+      return;
     }
-    if (audioCodec === 'copy' && probedData && probedData.audio_streams && probedData.audio_streams.length > 0) {
-      const checkedAudio = document.querySelector('input[name="audio-stream-radio"]:checked');
-      const audioStream = checkedAudio 
-        ? probedData.audio_streams.find(s => s.index == checkedAudio.value) 
-        : probedData.audio_streams[0];
-      if (audioStream) {
-        audioCodec = mapSourceCodecToOption(audioStream.codec_name, 'audio');
-      }
-    }
+
+    videoCodec = codecValueForCompatibility(videoCodec, 'video');
+    audioCodec = codecValueForCompatibility(audioCodec, 'audio');
 
     const rules = COMPATIBILITY_MATRIX[format];
     if (!rules) {
@@ -600,7 +690,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  document.getElementById('conv-format').addEventListener('change', checkTranscodingCompatibility);
+  document.getElementById('conv-format').addEventListener('change', () => {
+    updateCodecOptionsForFormat();
+    checkTranscodingCompatibility();
+  });
   document.getElementById('conv-vcodec').addEventListener('change', checkTranscodingCompatibility);
   document.getElementById('conv-acodec').addEventListener('change', checkTranscodingCompatibility);
 

@@ -22,6 +22,7 @@ from obsidian_codec.src.utils.ffmpeg_utils import (
     JOBS_LOCK,
     generate_thumbnail_grid,
     get_supported_hw_encoders,
+    get_compatible_transcoding_codecs,
     validate_transcoding_combination
 )
 
@@ -322,20 +323,43 @@ def run_interactive_wizard():
     base_name, ext = os.path.splitext(os.path.basename(filepath))
     
     if op_choice == "1": # Convert
-        container = Prompt.ask("Select output container", choices=["mp4", "mkv", "webm", "avi", "mov"], default="mp4")
-        vcodec = Prompt.ask("Select video codec", choices=["libx264", "libx265", "libvpx-vp9", "libaom-av1", "copy"], default="libx264")
+        container_choices = ["mp4", "mkv", "webm", "avi", "mov"]
+        all_video_codec_choices = ["libx264", "libx265", "libvpx-vp9", "libaom-av1", "copy"]
+        all_audio_codec_choices = ["aac", "libmp3lame", "libopus", "flac", "copy", "none"]
+
+        def compatible_codec_choices(selected_container):
+            video_choices = get_compatible_transcoding_codecs(
+                selected_container, all_video_codec_choices, "video", info, 0
+            )
+            audio_choices = get_compatible_transcoding_codecs(
+                selected_container, all_audio_codec_choices, "audio", info, 0
+            )
+            return video_choices, audio_choices
+
+        def select_default(choices, preferred):
+            return preferred if preferred in choices else choices[0]
+
+        container = Prompt.ask("Select output container", choices=container_choices, default="mp4")
+        video_codec_choices, audio_codec_choices = compatible_codec_choices(container)
+        vcodec = Prompt.ask("Select video codec", choices=video_codec_choices, default=select_default(video_codec_choices, "libx264"))
         resolution = Prompt.ask("Select target resolution", choices=["original", "3840x2160", "1920x1080", "1280x720", "854x480"], default="original")
         preset = Prompt.ask("Select encoding preset", choices=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], default="medium")
         crf = Prompt.ask("Enter CRF value (0-51, lower is better quality)", default="23")
         
-        acodec = Prompt.ask("Select audio codec", choices=["aac", "libmp3lame", "libopus", "flac", "copy", "none"], default="aac")
+        acodec = Prompt.ask("Select audio codec", choices=audio_codec_choices, default=select_default(audio_codec_choices, "aac"))
         
         # Validate container-codec combination compatibility
-        is_valid, err_msg = validate_transcoding_combination(container, vcodec, acodec, info, 0)
-        if not is_valid:
+        while True:
+            is_valid, err_msg = validate_transcoding_combination(container, vcodec, acodec, info, 0)
+            if is_valid:
+                break
+
             console.print(f"\n[bold red]Configuration Error:[/bold red] {err_msg}", style="red")
-            console.print("[bold yellow]Please restart the wizard and select compatible formats.[/bold yellow]\n")
-            return
+            console.print("[bold yellow]Please choose a compatible container and codec combination.[/bold yellow]\n")
+            container = Prompt.ask("Select output container", choices=container_choices, default=container)
+            video_codec_choices, audio_codec_choices = compatible_codec_choices(container)
+            vcodec = Prompt.ask("Select video codec", choices=video_codec_choices, default=select_default(video_codec_choices, vcodec))
+            acodec = Prompt.ask("Select audio codec", choices=audio_codec_choices, default=select_default(audio_codec_choices, acodec))
 
         # Build command
         cmd = ["ffmpeg", "-y", "-i", filepath]
