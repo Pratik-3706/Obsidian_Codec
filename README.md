@@ -23,6 +23,23 @@ Obsidian Codec is a high-performance, cross-platform media processing suite that
 
 ---
 
+## Demos & Previews
+
+### 🎬 Interactive CLI Wizard Demo (`conversion_demo.mp4`)
+https://github.com/user-attachments/assets/63ec4a9e-6dff-4de0-9260-91df05b140a9
+
+### 💻 Simple CLI Transcoding Demo (`simple_cli_demo.mp4`)
+https://github.com/user-attachments/assets/537771b5-144a-4471-9f42-6e87c5c26389
+
+### 🎨 Web UI Conversion Options Demo (`convertion_options.mp4`)
+https://github.com/user-attachments/assets/4b591de8-7cc3-447b-a4c6-0c26fd3fd928
+
+### ⚡ Various Options Demo (`verious_options.mp4`)
+*(Convert, Audio, Mute, Mux, Subs, GIFs, Contact Sheet, and Merge)*
+https://github.com/user-attachments/assets/ea75c6aa-2f9d-4ede-9930-3ac2ecaa3ea6
+
+---
+
 ## Architecture
 
 ```mermaid
