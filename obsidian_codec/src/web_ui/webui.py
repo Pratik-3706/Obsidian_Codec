@@ -809,12 +809,19 @@ def api_quit():
 
 if __name__ == "__main__":
     import threading
+    import webbrowser
     ensure_temp_dir()
     cleanup_temp_dir() # Initial cleanup on launch
     
     print("===================================================")
     print("  Obsidian_Codec WebUI starting on http://127.0.0.1:5000")
     print("===================================================")
+    
+    def open_browser():
+        time.sleep(1.0)
+        webbrowser.open("http://127.0.0.1:5000")
+        
+    threading.Thread(target=open_browser, daemon=True).start()
     
     # Run the server
     app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=False)
