@@ -36,7 +36,7 @@ https://github.com/user-attachments/assets/537771b5-144a-4471-9f42-6e87c5c26389
 ### 🎨 Web UI Conversion Options (`convertion_options.mp4`)
 *(Showing available formats, not a conversion demo)*
 
-https://github.com/user-attachments/assets/4b591de8-7cc3-447b-a4c6-0c26fd3fd928
+https://github.com/user-attachments/assets/9500ab50-9d60-4007-a84e-52c4bfd6228c
 
 ### ⚡ Various Options Tab Tour (`verious_options.mp4`)
 *(Showing the layout of Convert, Audio, Mute, Mux Subs, GIFs, Contact Sheet, and Merge tabs; not a conversion demo)*
