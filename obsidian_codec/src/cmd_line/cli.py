@@ -290,6 +290,189 @@ def run_ffmpeg_with_cli_progress(cmd, duration, output_path):
                 console.print(Panel("[bold yellow]⚠ Job was cancelled by user.[/bold yellow]", border_style="yellow"))
                 break
 
+def build_ffmpeg_convert_cmd(input_path, output_path, vcodec, acodec, crf, preset, resolution, audio_track, sub_track, sub_mode, meta):
+    cmd = ["ffmpeg", "-y"]
+    
+    # GPU decoders
+    available_hw = get_supported_hw_encoders()
+    hw_type = "none"
+    for t in ["nvenc", "qsv", "amf", "mf"]:
+        if t in available_hw:
+            hw_type = t
+            break
+            
+    input_dec_args = []
+    if hw_type in ["nvenc", "qsv"] and meta.get("video_streams"):
+        in_codec = meta["video_streams"][0].get("codec_name", "")
+        if hw_type == "nvenc" and in_codec in ["h264", "hevc", "vp9", "av1"]:
+            input_dec_args = ["-c:v", f"{in_codec}_cuvid"]
+        elif hw_type == "qsv" and in_codec in ["h264", "hevc", "vp9", "av1"]:
+            input_dec_args = ["-c:v", f"{in_codec}_qsv"]
+            
+    cmd += input_dec_args + ["-i", input_path]
+    
+    mapped_vcodec, v_args = map_codec_and_build_args(vcodec, preset, crf, resolution)
+    cmd += v_args
+    
+    if mapped_vcodec != vcodec:
+        console.print(f"[bold green]GPU Acceleration Active:[/bold green] Auto-switched [cyan]{vcodec}[/cyan] to [cyan]{mapped_vcodec}[/cyan]!")
+        
+    if acodec == "none":
+        cmd += ["-an"]
+    else:
+        cmd += ["-c:a", acodec]
+        
+    cmd += ["-map_metadata", "0"]
+    
+    # Audio track mapping
+    if audio_track is not None:
+        cmd += ["-map", "0:v:0", "-map", f"0:a:{audio_track}"]
+    else:
+        cmd += ["-map", "0:v:0?"]
+        if acodec != "none":
+            cmd += ["-map", "0:a?"]
+            
+    # Subtitle track mapping
+    if sub_track is not None and sub_track != -1:
+        if sub_mode == "hard":
+            escaped_path = input_path.replace("\\", "/").replace(":", "\\:")
+            sub_vf = f"subtitles='{escaped_path}':si={sub_track}"
+            vf_arg = sub_vf
+            for i, arg in enumerate(cmd):
+                if arg == "-vf":
+                    cmd[i+1] = f"{cmd[i+1]},{sub_vf}"
+                    vf_arg = None
+                    break
+            if vf_arg:
+                cmd += ["-vf", vf_arg]
+        else:
+            sub_codec = "mov_text" if output_path.lower().endswith((".mp4", ".m4v", ".mov")) else "copy"
+            cmd += ["-map", f"0:s:{sub_track}", "-c:s", sub_codec]
+    elif sub_track == -1:
+        cmd += ["-sn"]
+    else:
+        sub_codec = "mov_text" if output_path.lower().endswith((".mp4", ".m4v", ".mov")) else "copy"
+        cmd += ["-map", "0:s?", "-c:s", sub_codec]
+        
+    if any(x in mapped_vcodec for x in ["hevc", "h265", "x265"]):
+        if output_path.lower().endswith((".mp4", ".m4v", ".mov")):
+            cmd += ["-tag:v", "hvc1"]
+    if output_path.lower().endswith(".m4v"):
+        cmd += ["-f", "mp4"]
+        
+    cmd.append(output_path)
+    return cmd
+
+def check_file_stable(file_path):
+    try:
+        size1 = os.path.getsize(file_path)
+        time.sleep(2)
+        size2 = os.path.getsize(file_path)
+        return size1 == size2 and size1 > 0
+    except Exception:
+        return False
+
+def run_command_watch(args):
+    watch_dir = os.path.abspath(args.directory)
+    if not os.path.exists(watch_dir):
+        console.print(f"[bold red]Watch directory does not exist:[/bold red] {watch_dir}")
+        sys.exit(1)
+        
+    out_dir = args.output
+    if not out_dir:
+        out_dir = os.path.join(watch_dir, "converted")
+    else:
+        out_dir = os.path.abspath(out_dir)
+        
+    done_dir = args.done
+    if not done_dir:
+        done_dir = os.path.join(watch_dir, "done")
+    else:
+        done_dir = os.path.abspath(done_dir)
+        
+    # Ensure dirs exist
+    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(done_dir, exist_ok=True)
+    
+    console.print(Panel(f"Starting directory watch on [cyan]{watch_dir}[/cyan]\nOutput: [green]{out_dir}[/green]\nDone: [yellow]{done_dir}[/yellow]", border_style="cyan"))
+    
+    # Track processed files to avoid re-processing in same session
+    processed_files = set()
+    
+    # Handle preset: youtube
+    watch_preset = args.preset
+    vcodec = args.vcodec
+    acodec = "aac"
+    crf = args.crf
+    preset = "medium"
+    resolution = "original"
+    
+    if watch_preset == "youtube":
+        vcodec = "libx264"
+        acodec = "aac"
+        crf = "21"
+        preset = "medium"
+        console.print("[bold green]YouTube Preset Active:[/bold green] H.264, AAC, CRF 21, Medium preset, original resolution.")
+    else:
+        preset = watch_preset
+        
+    try:
+        while True:
+            try:
+                candidates = []
+                for f in os.listdir(watch_dir):
+                    f_path = os.path.join(watch_dir, f)
+                    if os.path.isfile(f_path) and f not in processed_files:
+                        ext = os.path.splitext(f)[1].lower()
+                        if ext in [".mp4", ".mkv", ".avi", ".mov", ".webm", ".ts", ".flv", ".ogg", ".m4v"]:
+                            candidates.append(f)
+                            
+                for f in candidates:
+                    f_path = os.path.join(watch_dir, f)
+                    console.print(f"[cyan]Detected file: {f}. Checking stability...[/cyan]")
+                    if check_file_stable(f_path):
+                        console.print(f"[green]File stable. Starting conversion for {f}...[/green]")
+                        
+                        # Build target output path
+                        base_name, target_ext = os.path.splitext(f)
+                        out_ext = ".mp4" if watch_preset == "youtube" else target_ext
+                        out_file = os.path.join(out_dir, f"{base_name}_obsidian{out_ext}")
+                        
+                        meta = probe_file(f_path)
+                        duration = meta.get("duration", 0)
+                        
+                        cmd = build_ffmpeg_convert_cmd(
+                            f_path, out_file, vcodec, acodec, crf,
+                            preset, resolution, None, None, "soft", meta
+                        )
+                        
+                        # Run the conversion synchronously in terminal and block/display progress
+                        run_ffmpeg_with_cli_progress(cmd, duration, out_file)
+                        
+                        # Move original file to done
+                        done_file = os.path.join(done_dir, f)
+                        if os.path.exists(done_file):
+                            base_d, ext_d = os.path.splitext(f)
+                            done_file = os.path.join(done_dir, f"{base_d}_{int(time.time())}{ext_d}")
+                        
+                        import shutil
+                        try:
+                            shutil.move(f_path, done_file)
+                            console.print(f"[green]Moved original input to: {done_file}[/green]")
+                        except Exception as me:
+                            console.print(f"[bold red]Error moving file to done:[/bold red] {me}")
+                            processed_files.add(f)
+                            
+                    else:
+                        console.print(f"[yellow]File {f} is not stable yet (still writing). Skipping...[/yellow]")
+                        
+            except Exception as loop_err:
+                console.print(f"[bold red]Error in watch loop:[/bold red] {loop_err}")
+                
+            time.sleep(2)
+    except KeyboardInterrupt:
+        console.print("\n[bold yellow]Stopping directory watch mode.[/bold yellow]")
+
 def run_interactive_wizard():
     print_banner()
     
@@ -361,29 +544,8 @@ def run_interactive_wizard():
             vcodec = Prompt.ask("Select video codec", choices=video_codec_choices, default=select_default(video_codec_choices, vcodec))
             acodec = Prompt.ask("Select audio codec", choices=audio_codec_choices, default=select_default(audio_codec_choices, acodec))
 
-        # Build command
-        cmd = ["ffmpeg", "-y", "-i", filepath]
-        mapped_vcodec, v_args = map_codec_and_build_args(vcodec, preset, crf, resolution)
-        cmd += v_args
-        
-        if mapped_vcodec != vcodec:
-            console.print(f"[bold green]GPU Acceleration Active:[/bold green] Auto-switched [cyan]{vcodec}[/cyan] to [cyan]{mapped_vcodec}[/cyan]!")
-            
-        if acodec == "none":
-            cmd += ["-an"]
-        else:
-            cmd += ["-c:a", acodec]
-            
-        cmd += ["-map_metadata", "0"]
-        
         out_path = os.path.join(input_dir, f"{base_name}_obsidian.{container}")
-        if any(x in mapped_vcodec for x in ["hevc", "h265", "x265"]):
-            if out_path.lower().endswith((".mp4", ".m4v", ".mov")):
-                cmd += ["-tag:v", "hvc1"]
-        if out_path.lower().endswith(".m4v"):
-            cmd += ["-f", "mp4"]
-        cmd.append(out_path)
-        
+        cmd = build_ffmpeg_convert_cmd(filepath, out_path, vcodec, acodec, crf, preset, resolution, None, None, "soft", info)
         run_ffmpeg_with_cli_progress(cmd, info['duration'], out_path)
         
     elif op_choice == "2": # Extract Audio
@@ -509,149 +671,240 @@ def run_interactive_wizard():
                 run_ffmpeg_with_cli_progress(cmd, info['duration'], out_path)
 
 def main():
-    parser = argparse.ArgumentParser(description="Obsidian_Codec: Universal Video & Media Converter CLI")
-    parser.add_argument("-i", "--input", help="Source media file path")
-    parser.add_argument("-o", "--output", help="Output destination file path")
-    parser.add_argument("--probe", action="store_true", help="Probe source file and print metadata streams")
-    parser.add_argument("-interactive", "--interactive", action="store_true", help="Launch terminal wizard interactive UI")
+    # Detect if using new subcommands or legacy arguments
+    new_subcommands = {"probe", "convert", "extract", "watch"}
     
-    # Parsing other simple flags to support CLI arguments
-    parser.add_argument("-c:v", "--vcodec", help="Video codec")
-    parser.add_argument("-c:a", "--acodec", help="Audio codec")
-    parser.add_argument("--crf", help="CRF value (0-51)")
-    parser.add_argument("--preset", help="Encoding preset")
-    parser.add_argument("--extract-audio", action="store_true", help="Extract audio track")
-    parser.add_argument("--extract-video", action="store_true", help="Extract video track (mute)")
-    parser.add_argument("--extract-subs", action="store_true", help="Extract subtitle track")
-    parser.add_argument("--sub-track", type=int, help="Index of subtitle track")
-    parser.add_argument("--sub-mode", choices=["soft", "hard"], default="soft", help="Mux mode for subtitles (soft or hard)")
-    parser.add_argument("--audio-track", type=int, help="Index of audio track")
-    
-    args = parser.parse_args()
-    
-    if len(sys.argv) == 1 or args.interactive:
-        run_interactive_wizard()
-        return
+    use_new_parser = False
+    if len(sys.argv) > 1 and sys.argv[1] in new_subcommands:
+        use_new_parser = True
         
-    if not args.input:
-        console.print("[bold red]Error:[/bold red] Input file (-i/--input) is required unless in interactive mode.", style="red")
-        sys.exit(1)
-        
-    if not os.path.exists(args.input):
-        console.print(f"[bold red]Error:[/bold red] Input file not found: {args.input}", style="red")
-        sys.exit(1)
-        
-    if args.probe:
-        print_banner()
-        display_file_probe(args.input)
-        return
-        
-    # Programmatic CLI triggers
-    meta = probe_file(args.input)
-    duration = meta.get("duration", 0)
-    
-    input_dir = os.path.dirname(args.input)
-    base_name, ext = os.path.splitext(os.path.basename(args.input))
-    
-    output_path = args.output
-    
-    if args.extract_audio:
-        codec = args.acodec or "libmp3lame"
-        out_ext = "." + codec.replace("libmp3lame", "mp3").replace("pcm_s16le", "wav").replace("libopus", "opus")
-        if not output_path:
-            output_path = os.path.join(input_dir, f"{base_name}_extracted{out_ext}")
-        cmd = ["ffmpeg", "-y", "-i", args.input, "-vn", "-c:a", codec]
-        if args.audio_track is not None:
-            cmd += ["-map", f"0:a:{args.audio_track}"]
-        cmd.append(output_path)
-        run_ffmpeg_with_cli_progress(cmd, duration, output_path)
-        
-    elif args.extract_video:
-        codec = args.vcodec or "copy"
-        if not output_path:
-            output_path = os.path.join(input_dir, f"{base_name}_video{ext}")
-        cmd = ["ffmpeg", "-y", "-i", args.input, "-an", "-c:v", codec]
-        if output_path.lower().endswith(".m4v"):
-            cmd += ["-f", "mp4"]
-        cmd.append(output_path)
-        run_ffmpeg_with_cli_progress(cmd, duration, output_path)
-        
-    elif args.extract_subs:
-        track = args.sub_track if args.sub_track is not None else 0
-        if not output_path:
-            output_path = os.path.join(input_dir, f"{base_name}_subs.srt")
-        cmd = ["ffmpeg", "-y", "-i", args.input, "-map", f"0:s:{track}", output_path]
-        run_ffmpeg_with_cli_progress(cmd, duration, output_path)
-        
-    else:
-        # Standard conversion
-        vcodec = args.vcodec or "libx264"
-        acodec = args.acodec or "aac"
-        
-        if not output_path:
-            output_path = os.path.join(input_dir, f"{base_name}_obsidian{ext}")
+    if use_new_parser:
+        parser = argparse.ArgumentParser(description="Obsidian Codec: Universal Video & Media Suite CLI")
+        subparsers = parser.add_subparsers(dest="command", required=True, help="Subcommands")
+
+        # 1. Probe subparser
+        probe_parser = subparsers.add_parser("probe", help="Probe source file and print metadata streams")
+        probe_parser.add_argument("input", help="Source media file path")
+
+        # 2. Convert subparser
+        convert_parser = subparsers.add_parser("convert", help="Convert / Compress Media")
+        convert_parser.add_argument("input", help="Source media file path")
+        convert_parser.add_argument("output", nargs="?", help="Output file path (optional)")
+        convert_parser.add_argument("--vcodec", default="libx264", help="Video codec (default: libx264)")
+        convert_parser.add_argument("--acodec", default="aac", help="Audio codec (default: aac)")
+        convert_parser.add_argument("--crf", default="23", help="CRF value (0-51, default: 23)")
+        convert_parser.add_argument("--preset", default="medium", help="Encoding preset (default: medium)")
+        convert_parser.add_argument("--resolution", default="original", help="Output frame resolution (e.g. 1920x1080 or original)")
+        convert_parser.add_argument("--audio-track", type=int, help="Index of audio track to preserve")
+        convert_parser.add_argument("--sub-track", type=int, help="Index of subtitle track to preserve/burn")
+        convert_parser.add_argument("--sub-mode", choices=["soft", "hard"], default="soft", help="Soft embed or hard burn subtitles")
+
+        # 3. Extract subparser
+        extract_parser = subparsers.add_parser("extract", help="Extract streams or components")
+        extract_parser.add_argument("type", choices=["audio", "video", "subs", "chapters"], help="Type of component to extract")
+        extract_parser.add_argument("input", help="Source media file path")
+        extract_parser.add_argument("output", nargs="?", help="Output destination path")
+        extract_parser.add_argument("--acodec", default="libmp3lame", help="Audio codec for audio extraction")
+        extract_parser.add_argument("--vcodec", default="copy", help="Video codec for video extraction")
+        extract_parser.add_argument("--bitrate", default="320k", help="Audio bitrate (default: 320k)")
+        extract_parser.add_argument("--audio-track", type=int, default=0, help="Index of audio track to extract")
+        extract_parser.add_argument("--sub-track", type=int, default=0, help="Index of subtitle track to extract")
+        extract_parser.add_argument("--sub-format", choices=["srt", "vtt"], default="srt", help="Subtitle format to extract")
+
+        # 4. Watch subparser
+        watch_parser = subparsers.add_parser("watch", help="Watch a directory for incoming files and convert them")
+        watch_parser.add_argument("directory", help="Directory path to poll / watch")
+        watch_parser.add_argument("-o", "--output", help="Directory path to save converted files (default: directory/converted)")
+        watch_parser.add_argument("-d", "--done", help="Directory path to move completed original inputs (default: directory/done)")
+        watch_parser.add_argument("--preset", default="medium", help="Conversion preset (e.g. youtube or medium)")
+        watch_parser.add_argument("--vcodec", default="libx264", help="Video codec for watched conversions")
+        watch_parser.add_argument("--crf", default="23", help="CRF for watched conversions")
+
+        args = parser.parse_args()
+
+        if args.command == "probe":
+            if not os.path.exists(args.input):
+                console.print(f"[bold red]Error:[/bold red] Input file not found: {args.input}", style="red")
+                sys.exit(1)
+            print_banner()
+            display_file_probe(args.input)
+
+        elif args.command == "convert":
+            if not os.path.exists(args.input):
+                console.print(f"[bold red]Error:[/bold red] Input file not found: {args.input}", style="red")
+                sys.exit(1)
+            meta = probe_file(args.input)
+            duration = meta.get("duration", 0)
             
-        # Validate container-codec combination compatibility
-        out_container = os.path.splitext(output_path)[1].lstrip(".") or "mp4"
-        is_valid, err_msg = validate_transcoding_combination(out_container, vcodec, acodec, meta, args.audio_track)
-        if not is_valid:
-            console.print(f"[bold red]Validation Error:[/bold red] {err_msg}", style="red")
+            input_dir = os.path.dirname(args.input)
+            base_name, ext = os.path.splitext(os.path.basename(args.input))
+            
+            output_path = args.output
+            if not output_path:
+                output_path = os.path.join(input_dir, f"{base_name}_obsidian{ext}")
+                
+            out_container = os.path.splitext(output_path)[1].lstrip(".") or "mp4"
+            is_valid, err_msg = validate_transcoding_combination(out_container, args.vcodec, args.acodec, meta, args.audio_track)
+            if not is_valid:
+                console.print(f"[bold red]Validation Error:[/bold red] {err_msg}", style="red")
+                sys.exit(1)
+                
+            cmd = build_ffmpeg_convert_cmd(
+                args.input, output_path, args.vcodec, args.acodec, args.crf,
+                args.preset, args.resolution, args.audio_track, args.sub_track, args.sub_mode, meta
+            )
+            run_ffmpeg_with_cli_progress(cmd, duration, output_path)
+
+        elif args.command == "extract":
+            if not os.path.exists(args.input):
+                console.print(f"[bold red]Error:[/bold red] Input file not found: {args.input}", style="red")
+                sys.exit(1)
+            meta = probe_file(args.input)
+            duration = meta.get("duration", 0)
+            
+            input_dir = os.path.dirname(args.input)
+            base_name, ext = os.path.splitext(os.path.basename(args.input))
+            
+            output_path = args.output
+
+            if args.type == "audio":
+                codec = args.acodec
+                out_ext = "." + codec.replace("libmp3lame", "mp3").replace("pcm_s16le", "wav").replace("libopus", "opus")
+                if not output_path:
+                    output_path = os.path.join(input_dir, f"{base_name}_extracted{out_ext}")
+                cmd = ["ffmpeg", "-y", "-i", args.input, "-vn", "-c:a", codec, "-b:a", args.bitrate]
+                if args.audio_track is not None:
+                    cmd += ["-map", f"0:a:{args.audio_track}"]
+                cmd.append(output_path)
+                run_ffmpeg_with_cli_progress(cmd, duration, output_path)
+
+            elif args.type == "video":
+                codec = args.vcodec
+                if not output_path:
+                    output_path = os.path.join(input_dir, f"{base_name}_video{ext}")
+                cmd = ["ffmpeg", "-y", "-i", args.input, "-an", "-c:v", codec]
+                if output_path.lower().endswith(".m4v"):
+                    cmd += ["-f", "mp4"]
+                cmd.append(output_path)
+                run_ffmpeg_with_cli_progress(cmd, duration, output_path)
+
+            elif args.type == "subs":
+                track = args.sub_track
+                fmt = args.sub_format
+                if not output_path:
+                    output_path = os.path.join(input_dir, f"{base_name}_subs.{fmt}")
+                cmd = ["ffmpeg", "-y", "-i", args.input, "-map", f"0:s:{track}", output_path]
+                run_ffmpeg_with_cli_progress(cmd, duration, output_path)
+
+            elif args.type == "chapters":
+                if not output_path:
+                    output_path = os.path.join(input_dir, f"{base_name}_chapters.json")
+                console.print(f"[cyan]Writing chapters to: {output_path}...[/cyan]")
+                import json
+                with open(output_path, "w", encoding="utf-8") as f:
+                    json.dump(meta.get("chapters", []), f, indent=2)
+                console.print("[bold green]✔ Chapters extracted successfully![/bold green]")
+
+        elif args.command == "watch":
+            run_command_watch(args)
+
+    else:
+        # Legacy positional / flags parser (Backward Compatibility)
+        parser = argparse.ArgumentParser(description="Obsidian_Codec: Universal Video & Media Converter CLI")
+        parser.add_argument("-i", "--input", help="Source media file path")
+        parser.add_argument("-o", "--output", help="Output destination file path")
+        parser.add_argument("--probe", action="store_true", help="Probe source file and print metadata streams")
+        parser.add_argument("-interactive", "--interactive", action="store_true", help="Launch terminal wizard interactive UI")
+        
+        parser.add_argument("-c:v", "--vcodec", help="Video codec")
+        parser.add_argument("-c:a", "--acodec", help="Audio codec")
+        parser.add_argument("--crf", help="CRF value (0-51)")
+        parser.add_argument("--preset", help="Encoding preset")
+        parser.add_argument("--extract-audio", action="store_true", help="Extract audio track")
+        parser.add_argument("--extract-video", action="store_true", help="Extract video track (mute)")
+        parser.add_argument("--extract-subs", action="store_true", help="Extract subtitle track")
+        parser.add_argument("--sub-track", type=int, help="Index of subtitle track")
+        parser.add_argument("--sub-mode", choices=["soft", "hard"], default="soft", help="Mux mode for subtitles (soft or hard)")
+        parser.add_argument("--audio-track", type=int, help="Index of audio track")
+        
+        args = parser.parse_args()
+        
+        if len(sys.argv) == 1 or args.interactive:
+            run_interactive_wizard()
+            return
+            
+        if not args.input:
+            console.print("[bold red]Error:[/bold red] Input file (-i/--input) is required unless in interactive mode.", style="red")
             sys.exit(1)
             
-        cmd = ["ffmpeg", "-y", "-i", args.input]
-        crf_val = args.crf or "23"
-        preset_val = args.preset or "medium"
-        
-        mapped_vcodec, v_args = map_codec_and_build_args(vcodec, preset_val, crf_val, "original")
-        cmd += v_args
-        
-        if mapped_vcodec != vcodec:
-            console.print(f"[bold green]GPU Acceleration Active:[/bold green] Auto-switched [cyan]{vcodec}[/cyan] to [cyan]{mapped_vcodec}[/cyan]!")
+        if not os.path.exists(args.input):
+            console.print(f"[bold red]Error:[/bold red] Input file not found: {args.input}", style="red")
+            sys.exit(1)
             
-        if acodec == "none":
-            cmd += ["-an"]
-        else:
-            cmd += ["-c:a", acodec]
+        if args.probe:
+            print_banner()
+            display_file_probe(args.input)
+            return
             
-        # Audio track mapping
-        if args.audio_track is not None:
-            cmd += ["-map", "0:v:0", "-map", f"0:a:{args.audio_track}"]
+        # Programmatic CLI triggers
+        meta = probe_file(args.input)
+        duration = meta.get("duration", 0)
+        
+        input_dir = os.path.dirname(args.input)
+        base_name, ext = os.path.splitext(os.path.basename(args.input))
+        
+        output_path = args.output
+        
+        if args.extract_audio:
+            codec = args.acodec or "libmp3lame"
+            out_ext = "." + codec.replace("libmp3lame", "mp3").replace("pcm_s16le", "wav").replace("libopus", "opus")
+            if not output_path:
+                output_path = os.path.join(input_dir, f"{base_name}_extracted{out_ext}")
+            cmd = ["ffmpeg", "-y", "-i", args.input, "-vn", "-c:a", codec]
+            if args.audio_track is not None:
+                cmd += ["-map", f"0:a:{args.audio_track}"]
+            cmd.append(output_path)
+            run_ffmpeg_with_cli_progress(cmd, duration, output_path)
+            
+        elif args.extract_video:
+            codec = args.vcodec or "copy"
+            if not output_path:
+                output_path = os.path.join(input_dir, f"{base_name}_video{ext}")
+            cmd = ["ffmpeg", "-y", "-i", args.input, "-an", "-c:v", codec]
+            if output_path.lower().endswith(".m4v"):
+                cmd += ["-f", "mp4"]
+            cmd.append(output_path)
+            run_ffmpeg_with_cli_progress(cmd, duration, output_path)
+            
+        elif args.extract_subs:
+            track = args.sub_track if args.sub_track is not None else 0
+            if not output_path:
+                output_path = os.path.join(input_dir, f"{base_name}_subs.srt")
+            cmd = ["ffmpeg", "-y", "-i", args.input, "-map", f"0:s:{track}", output_path]
+            run_ffmpeg_with_cli_progress(cmd, duration, output_path)
+            
         else:
-            cmd += ["-map", "0:v:0?"]
-            if acodec != "none":
-                cmd += ["-map", "0:a?"]
+            # Standard conversion (legacy)
+            vcodec = args.vcodec or "libx264"
+            acodec = args.acodec or "aac"
+            
+            if not output_path:
+                output_path = os.path.join(input_dir, f"{base_name}_obsidian{ext}")
                 
-        # Subtitle track mapping
-        if args.sub_track is not None and args.sub_track != -1:
-            sub_idx = args.sub_track
-            if args.sub_mode == "hard":
-                escaped_path = args.input.replace("\\", "/").replace(":", "\\:")
-                sub_vf = f"subtitles='{escaped_path}':si={sub_idx}"
-                vf_arg = sub_vf
-                for i, arg in enumerate(cmd):
-                    if arg == "-vf":
-                        cmd[i+1] = f"{cmd[i+1]},{sub_vf}"
-                        vf_arg = None
-                        break
-                if vf_arg:
-                    cmd += ["-vf", vf_arg]
-            else:
-                sub_codec = "mov_text" if output_path.lower().endswith((".mp4", ".m4v", ".mov")) else "copy"
-                cmd += ["-map", f"0:s:{sub_idx}", "-c:s", sub_codec]
-        elif args.sub_track == -1:
-            cmd += ["-sn"]
-        else:
-            sub_codec = "mov_text" if output_path.lower().endswith((".mp4", ".m4v", ".mov")) else "copy"
-            cmd += ["-map", "0:s?", "-c:s", sub_codec]
+            out_container = os.path.splitext(output_path)[1].lstrip(".") or "mp4"
+            is_valid, err_msg = validate_transcoding_combination(out_container, vcodec, acodec, meta, args.audio_track)
+            if not is_valid:
+                console.print(f"[bold red]Validation Error:[/bold red] {err_msg}", style="red")
+                sys.exit(1)
+                
+            crf_val = args.crf or "23"
+            preset_val = args.preset or "medium"
             
-        if any(x in mapped_vcodec for x in ["hevc", "h265", "x265"]):
-            if output_path.lower().endswith((".mp4", ".m4v", ".mov")):
-                cmd += ["-tag:v", "hvc1"]
-        cmd += ["-map_metadata", "0"]
-        if output_path.lower().endswith(".m4v"):
-            cmd += ["-f", "mp4"]
-        cmd.append(output_path)
-        run_ffmpeg_with_cli_progress(cmd, duration, output_path)
+            cmd = build_ffmpeg_convert_cmd(
+                args.input, output_path, vcodec, acodec, crf_val,
+                preset_val, "original", args.audio_track, args.sub_track, args.sub_mode, meta
+            )
+            run_ffmpeg_with_cli_progress(cmd, duration, output_path)
 
 if __name__ == "__main__":
     main()

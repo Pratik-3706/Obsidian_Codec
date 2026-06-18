@@ -12,31 +12,66 @@ ACTIVE_JOBS = {}
 JOBS_LOCK = threading.Lock()
 
 TEMP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "temp"))
-OUTPUT_DIR = os.path.abspath(os.path.expanduser("~/Obsidian_Codec_Output"))
+OUTPUT_ROOT = os.path.abspath(os.environ.get("OUTPUT_ROOT", os.path.expanduser("~/Obsidian_Codec_Output")))
+OUTPUT_DIR = OUTPUT_ROOT
+
+# Allow 2 parallel conversions
+CONVERSION_SEMAPHORE = threading.Semaphore(2)
+
+JOBS_FILE = os.path.join(TEMP_DIR, "active_jobs.json")
 
 def is_safe_path(path):
     if not path:
         return False
     try:
-        real_path = os.path.realpath(os.path.abspath(path))
-        for base in [TEMP_DIR, OUTPUT_DIR]:
-            real_base = os.path.realpath(os.path.abspath(base))
-            if real_path == real_base or real_path.startswith(real_base + os.sep):
-                return True
-        home = os.path.expanduser("~")
-        real_home = os.path.realpath(os.path.abspath(home))
-        if real_path == real_home or real_path.startswith(real_home + os.sep):
-            return True
+        path_abs = os.path.abspath(os.path.realpath(path))
+        allowed_dirs = [TEMP_DIR, OUTPUT_ROOT]
+        
         custom_bases = os.environ.get("OBSIDIAN_CODEC_ALLOWED_BASES")
         if custom_bases:
             for base in custom_bases.split(os.pathsep):
                 if base.strip():
-                    real_base = os.path.realpath(os.path.abspath(base.strip()))
-                    if real_path == real_base or real_path.startswith(real_base + os.sep):
-                        return True
+                    allowed_dirs.append(os.path.abspath(os.path.realpath(base.strip())))
+        else:
+            allowed_dirs.append(os.path.abspath(os.path.realpath(os.path.expanduser("~"))))
+            
+        for parent in allowed_dirs:
+            parent_abs = os.path.abspath(os.path.realpath(parent))
+            try:
+                if os.path.commonpath([path_abs, parent_abs]) == parent_abs:
+                    return True
+            except ValueError:
+                pass
     except Exception:
         pass
     return False
+
+def save_jobs_to_disk():
+    try:
+        ensure_temp_dir()
+        serializable = {}
+        for jid, job in ACTIVE_JOBS.items():
+            serializable[jid] = {k: v for k, v in job.items() if k != 'process'}
+        with open(JOBS_FILE, "w", encoding="utf-8") as f:
+            json.dump(serializable, f, indent=2)
+    except Exception as e:
+        print(f"Error saving jobs: {e}", file=sys.stderr)
+
+def load_jobs_from_disk():
+    global ACTIVE_JOBS
+    if os.path.exists(JOBS_FILE):
+        try:
+            with open(JOBS_FILE, "r", encoding="utf-8") as f:
+                jobs = json.load(f)
+            for jid, job in jobs.items():
+                if job.get('status') in ('running', 'pending'):
+                    job['status'] = 'failed'
+                    job['error'] = 'Server restarted during encoding.'
+                    job['finished_time'] = time.time()
+                job['process'] = None
+                ACTIVE_JOBS[jid] = job
+        except Exception as e:
+            print(f"Error loading jobs: {e}", file=sys.stderr)
 
 def is_safe_output_path(path):
     if not path:
@@ -280,6 +315,7 @@ def cancel_job(job_id):
             except Exception:
                 pass
                 
+        save_jobs_to_disk()
         return True, "Job cancelled"
 
 def run_ffprobe(args):
@@ -388,187 +424,195 @@ def run_ffmpeg_subprocess(job_id, cmd, total_duration, output_path, input_path):
     """Runs the ffmpeg command as a subprocess and parses progress logs."""
     ensure_temp_dir()
     
-    with JOBS_LOCK:
-        if job_id not in ACTIVE_JOBS:
-            # If deleted or cancelled before starting
-            return
-        ACTIVE_JOBS[job_id]['status'] = 'running'
-        ACTIVE_JOBS[job_id]['output_path'] = output_path
-        ACTIVE_JOBS[job_id]['input_path'] = input_path
-        
     try:
-        # We append '-progress pipe:1' to get updates on stdout.
-        # Ensure we place it properly.
-        # But wait, if cmd already runs progress, don't duplicate it.
-        if "-progress" not in cmd:
-            cmd += ["-progress", "pipe:1"]
-            
-        startupinfo = None
-        if sys.platform == "win32":
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            
-        # Run process
-        # stdout: progress info, stderr: logs / warnings / errors
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            bufsize=1,
-            startupinfo=startupinfo
-        )
-        
         with JOBS_LOCK:
-            # Re-check state, maybe it was cancelled during launch
-            if ACTIVE_JOBS[job_id]['status'] == 'cancelled':
-                proc.kill()
+            if job_id not in ACTIVE_JOBS:
+                # If deleted or cancelled before starting
                 return
-            ACTIVE_JOBS[job_id]['process'] = proc
-
-        # Thread to read stderr logs so they don't block and we can show them to user
-        stderr_lines = ["Command: " + " ".join(cmd)]
-        def read_stderr():
-            for line in proc.stderr:
-                stripped = line.strip()
-                if stripped:
-                    stderr_lines.append(stripped)
-                    # Limit log buffer size
-                    if len(stderr_lines) > 200:
-                        stderr_lines.pop(0)
-                    with JOBS_LOCK:
-                        if job_id in ACTIVE_JOBS:
-                            ACTIVE_JOBS[job_id]['log'] = list(stderr_lines)
-        
-        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
-        stderr_thread.start()
-
-        # Parse progress on stdout
-        current_progress = 0.0
-        current_speed = "0.0x"
-        current_size = "0 B"
-        current_eta = "Unknown"
-        current_time = 0.0
-        
-        progress_data = {}
-        
-        for line in proc.stdout:
-            # We are parsing key=value pairs
-            if "=" in line:
-                key, val = line.strip().split("=", 1)
-                progress_data[key] = val
+            ACTIVE_JOBS[job_id]['status'] = 'running'
+            ACTIVE_JOBS[job_id]['output_path'] = output_path
+            ACTIVE_JOBS[job_id]['input_path'] = input_path
+        save_jobs_to_disk()
+            
+        try:
+            # We append '-progress pipe:1' to get updates on stdout.
+            # Ensure we place it properly.
+            # But wait, if cmd already runs progress, don't duplicate it.
+            if "-progress" not in cmd:
+                cmd += ["-progress", "pipe:1"]
                 
-                # We update on 'progress=continue' or when it completes
-                if key == "progress":
-                    out_time_us = progress_data.get("out_time_us", "0")
-                    try:
-                        current_time = max(0.0, float(out_time_us) / 1000000.0)
-                    except (ValueError, TypeError):
-                        pass
-                    
-                    if total_duration > 0:
-                        current_progress = min(100.0, (current_time / total_duration) * 100.0)
-                            
-                    speed_val = progress_data.get("speed", "0.0x").strip()
-                    if speed_val != "N/A":
-                        current_speed = speed_val
-                        
-                    size_bytes = progress_data.get("total_size", "0")
-                    if size_bytes.isdigit():
-                        sb = int(size_bytes)
-                        if sb < 1024:
-                            current_size = f"{sb} B"
-                        elif sb < 1024 * 1024:
-                            current_size = f"{sb/1024:.2f} KB"
-                        elif sb < 1024 * 1024 * 1024:
-                            current_size = f"{sb/(1024*1024):.2f} MB"
-                        else:
-                            current_size = f"{sb/(1024*1024*1024):.2f} GB"
-                            
-                    # Calculate ETA
-                    if current_progress > 0 and current_progress < 100:
-                        speed_factor = 1.0
-                        if current_speed.endswith("x"):
-                            try:
-                                speed_factor = float(current_speed[:-1])
-                            except ValueError:
-                                pass
-                        if speed_factor > 0:
-                            rem_time = (total_duration - current_time) / speed_factor
-                            if rem_time >= 0:
-                                mins, secs = divmod(int(rem_time), 60)
-                                hrs, mins = divmod(mins, 60)
-                                if hrs > 0:
-                                    current_eta = f"{hrs:02d}:{mins:02d}:{secs:02d}"
-                                else:
-                                    current_eta = f"{mins:02d}:{secs:02d}"
-                        else:
-                            current_eta = "Unknown"
-                    elif current_progress >= 100:
-                        current_eta = "00:00"
-                        
-                    # Update active job state
-                    with JOBS_LOCK:
-                      if job_id in ACTIVE_JOBS and ACTIVE_JOBS[job_id]['status'] == 'running':
-                        ACTIVE_JOBS[job_id].update({
-                          'progress': round(current_progress, 2),
-                          'speed': current_speed,
-                          'size': current_size,
-                          'eta': current_eta,
-                          'out_time': current_time
-                        })
-                            
-                    progress_data = {} # Reset for next packet
-        
-        proc.wait()
-        stderr_thread.join(timeout=1.0)
-        
-        with JOBS_LOCK:
-            if job_id in ACTIVE_JOBS:
+            startupinfo = None
+            if sys.platform == "win32":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                
+            # Run process
+            # stdout: progress info, stderr: logs / warnings / errors
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                bufsize=1,
+                startupinfo=startupinfo
+            )
+            
+            with JOBS_LOCK:
+                # Re-check state, maybe it was cancelled during launch
                 if ACTIVE_JOBS[job_id]['status'] == 'cancelled':
-                    # Already handled by cancellation method
+                    proc.kill()
                     return
-                if proc.returncode == 0:
-                    ACTIVE_JOBS[job_id]['status'] = 'completed'
-                    ACTIVE_JOBS[job_id]['finished_time'] = time.time()
-                    ACTIVE_JOBS[job_id]['progress'] = 100.0
-                    ACTIVE_JOBS[job_id]['eta'] = "00:00"
+                ACTIVE_JOBS[job_id]['process'] = proc
+            save_jobs_to_disk()
+
+            # Thread to read stderr logs so they don't block and we can show them to user
+            stderr_lines = ["Command: " + " ".join(cmd)]
+            def read_stderr():
+                for line in proc.stderr:
+                    stripped = line.strip()
+                    if stripped:
+                        stderr_lines.append(stripped)
+                        # Limit log buffer size
+                        if len(stderr_lines) > 200:
+                            stderr_lines.pop(0)
+                        with JOBS_LOCK:
+                            if job_id in ACTIVE_JOBS:
+                                ACTIVE_JOBS[job_id]['log'] = list(stderr_lines)
+                        save_jobs_to_disk()
+            
+            stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+            stderr_thread.start()
+
+            # Parse progress on stdout
+            current_progress = 0.0
+            current_speed = "0.0x"
+            current_size = "0 B"
+            current_eta = "Unknown"
+            current_time = 0.0
+            
+            progress_data = {}
+            
+            for line in proc.stdout:
+                # We are parsing key=value pairs
+                if "=" in line:
+                    key, val = line.strip().split("=", 1)
+                    progress_data[key] = val
                     
-                    # Log final actual output size if available
-                    if os.path.exists(output_path):
-                        sb = os.path.getsize(output_path)
-                        if sb < 1024 * 1024:
-                            ACTIVE_JOBS[job_id]['size'] = f"{sb/1024:.2f} KB"
-                        elif sb < 1024 * 1024 * 1024:
-                            ACTIVE_JOBS[job_id]['size'] = f"{sb/(1024*1024):.2f} MB"
-                        else:
-                            ACTIVE_JOBS[job_id]['size'] = f"{sb/(1024*1024*1024):.2f} GB"
-                else:
+                    # We update on 'progress=continue' or when it completes
+                    if key == "progress":
+                        out_time_us = progress_data.get("out_time_us", "0")
+                        try:
+                            current_time = max(0.0, float(out_time_us) / 1000000.0)
+                        except (ValueError, TypeError):
+                            pass
+                        
+                        if total_duration > 0:
+                            current_progress = min(100.0, (current_time / total_duration) * 100.0)
+                                
+                        speed_val = progress_data.get("speed", "0.0x").strip()
+                        if speed_val != "N/A":
+                            current_speed = speed_val
+                            
+                        size_bytes = progress_data.get("total_size", "0")
+                        if size_bytes.isdigit():
+                            sb = int(size_bytes)
+                            if sb < 1024:
+                                current_size = f"{sb} B"
+                            elif sb < 1024 * 1024:
+                                current_size = f"{sb/1024:.2f} KB"
+                            elif sb < 1024 * 1024 * 1024:
+                                current_size = f"{sb/(1024*1024):.2f} MB"
+                            else:
+                                current_size = f"{sb/(1024*1024*1024):.2f} GB"
+                                
+                        # Calculate ETA
+                        if current_progress > 0 and current_progress < 100:
+                            speed_factor = 1.0
+                            if current_speed.endswith("x"):
+                                try:
+                                    speed_factor = float(current_speed[:-1])
+                                except ValueError:
+                                    pass
+                            if speed_factor > 0:
+                                rem_time = (total_duration - current_time) / speed_factor
+                                if rem_time >= 0:
+                                    mins, secs = divmod(int(rem_time), 60)
+                                    hrs, mins = divmod(mins, 60)
+                                    if hrs > 0:
+                                        current_eta = f"{hrs:02d}:{mins:02d}:{secs:02d}"
+                                    else:
+                                        current_eta = f"{mins:02d}:{secs:02d}"
+                            else:
+                                current_eta = "Unknown"
+                        elif current_progress >= 100:
+                            current_eta = "00:00"
+                            
+                        # Update active job state
+                        with JOBS_LOCK:
+                          if job_id in ACTIVE_JOBS and ACTIVE_JOBS[job_id]['status'] == 'running':
+                            ACTIVE_JOBS[job_id].update({
+                              'progress': round(current_progress, 2),
+                              'speed': current_speed,
+                              'size': current_size,
+                              'eta': current_eta,
+                              'out_time': current_time
+                            })
+                        save_jobs_to_disk()
+                                
+                        progress_data = {} # Reset for next packet
+            
+            proc.wait()
+            stderr_thread.join(timeout=1.0)
+            
+            with JOBS_LOCK:
+                if job_id in ACTIVE_JOBS:
+                    if ACTIVE_JOBS[job_id]['status'] == 'cancelled':
+                        # Already handled by cancellation method
+                        return
+                    if proc.returncode == 0:
+                        ACTIVE_JOBS[job_id]['status'] = 'completed'
+                        ACTIVE_JOBS[job_id]['finished_time'] = time.time()
+                        ACTIVE_JOBS[job_id]['progress'] = 100.0
+                        ACTIVE_JOBS[job_id]['eta'] = "00:00"
+                        
+                        # Log final actual output size if available
+                        if os.path.exists(output_path):
+                            sb = os.path.getsize(output_path)
+                            if sb < 1024 * 1024:
+                                ACTIVE_JOBS[job_id]['size'] = f"{sb/1024:.2f} KB"
+                            elif sb < 1024 * 1024 * 1024:
+                                ACTIVE_JOBS[job_id]['size'] = f"{sb/(1024*1024):.2f} MB"
+                            else:
+                                ACTIVE_JOBS[job_id]['size'] = f"{sb/(1024*1024*1024):.2f} GB"
+                    else:
+                        ACTIVE_JOBS[job_id]['status'] = 'failed'
+                        ACTIVE_JOBS[job_id]['finished_time'] = time.time()
+                        err_msg = "\n".join(stderr_lines[-5:]) if stderr_lines else "Unknown FFmpeg error"
+                        ACTIVE_JOBS[job_id]['error'] = f"FFmpeg failed with exit code {proc.returncode}. Error:\n{err_msg}"
+                        # Remove incomplete output file
+                        if os.path.exists(output_path) and is_safe_output_path(output_path):
+                            try:
+                                os.unlink(output_path)
+                            except Exception:
+                                pass
+            save_jobs_to_disk()
+                                
+        except Exception as e:
+            print(f"Exception in running FFmpeg job: {e}", file=sys.stderr)
+            with JOBS_LOCK:
+                if job_id in ACTIVE_JOBS and ACTIVE_JOBS[job_id]['status'] != 'cancelled':
                     ACTIVE_JOBS[job_id]['status'] = 'failed'
                     ACTIVE_JOBS[job_id]['finished_time'] = time.time()
-                    err_msg = "\n".join(stderr_lines[-5:]) if stderr_lines else "Unknown FFmpeg error"
-                    ACTIVE_JOBS[job_id]['error'] = f"FFmpeg failed with exit code {proc.returncode}. Error:\n{err_msg}"
-                    # Remove incomplete output file
-                    if os.path.exists(output_path) and is_safe_output_path(output_path):
-                        try:
-                            os.unlink(output_path)
-                        except Exception:
-                            pass
-                            
-    except Exception as e:
-        print(f"Exception in running FFmpeg job: {e}", file=sys.stderr)
-        with JOBS_LOCK:
-            if job_id in ACTIVE_JOBS and ACTIVE_JOBS[job_id]['status'] != 'cancelled':
-                ACTIVE_JOBS[job_id]['status'] = 'failed'
-                ACTIVE_JOBS[job_id]['finished_time'] = time.time()
-                ACTIVE_JOBS[job_id]['error'] = str(e)
-        if os.path.exists(output_path) and is_safe_output_path(output_path):
-            try:
-                os.unlink(output_path)
-            except Exception:
-                pass
+                    ACTIVE_JOBS[job_id]['error'] = str(e)
+            save_jobs_to_disk()
+            if os.path.exists(output_path) and is_safe_output_path(output_path):
+                try:
+                    os.unlink(output_path)
+                except Exception:
+                    pass
     finally:
+        CONVERSION_SEMAPHORE.release()
         # Clean up temp inputs
         if input_path and TEMP_DIR in os.path.abspath(input_path) and os.path.exists(input_path):
             try:
@@ -580,6 +624,11 @@ def start_conversion_thread(job_id, cmd, total_duration, output_path, input_path
     """Starts the FFmpeg process in a background thread."""
     ensure_temp_dir()
     
+    # Try to acquire the semaphore first non-blockingly
+    acquired = CONVERSION_SEMAPHORE.acquire(blocking=False)
+    if not acquired:
+        return None
+        
     # Prune old finished jobs from memory (older than 5 minutes / 300 seconds)
     now = time.time()
     with JOBS_LOCK:
@@ -603,6 +652,7 @@ def start_conversion_thread(job_id, cmd, total_duration, output_path, input_path
             'error': None,
             'finished_time': None
         }
+    save_jobs_to_disk()
     
     t = threading.Thread(target=run_ffmpeg_subprocess, args=(job_id, cmd, total_duration, output_path, input_path), daemon=True)
     t.start()
@@ -722,3 +772,7 @@ def validate_transcoding_combination(container, vcodec, acodec, meta=None, audio
         return False, err_msg
 
     return True, ""
+
+# Load persisted jobs on startup
+load_jobs_from_disk()
+

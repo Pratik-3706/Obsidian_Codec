@@ -34,7 +34,8 @@ from obsidian_codec.src.utils.ffmpeg_utils import (
     validate_transcoding_combination,
     is_safe_path,
     is_safe_output_path,
-    OUTPUT_DIR
+    OUTPUT_DIR,
+    save_jobs_to_disk
 )
 
 app = Flask(
@@ -315,6 +316,7 @@ def api_convert():
             
             # Map video codec to hardware encoder if applicable
             mapped_vcodec = video_codec
+            hw_type = "none"
             if video_codec != "copy" and hw_accel != "none":
                 available_hw = get_supported_hw_encoders()
                 hw_type = hw_accel
@@ -337,6 +339,18 @@ def api_convert():
                 elif hw_type == "mf":
                     mapped_vcodec = "h264_mf" if video_codec == "libx264" else "hevc_mf" if video_codec == "libx265" else video_codec
                     
+            # Determine input hardware decoder prefix
+            input_dec_args = []
+            if hw_type in ["nvenc", "qsv"] and meta.get("video_streams"):
+                in_codec = meta["video_streams"][0].get("codec_name", "")
+                if hw_type == "nvenc":
+                    if in_codec in ["h264", "hevc", "vp9", "av1"]:
+                        input_dec_args = ["-c:v", f"{in_codec}_cuvid"]
+                elif hw_type == "qsv":
+                    if in_codec in ["h264", "hevc", "vp9", "av1"]:
+                        input_dec_args = ["-c:v", f"{in_codec}_qsv"]
+            
+            cmd = ["ffmpeg", "-y"] + input_dec_args + ["-i", input_path]
             cmd += ["-c:v", mapped_vcodec]
             
             if video_codec != "copy":
@@ -552,6 +566,7 @@ def api_convert():
                 with JOBS_LOCK:
                     ACTIVE_JOBS[job_id]['size'] = f"{sb} B" if sb < 1024 else f"{sb/1024:.2f} KB"
                     
+            save_jobs_to_disk()
             return jsonify({"job_id": job_id})
             
         elif operation == "extract_frames":
@@ -595,6 +610,7 @@ def api_convert():
                     'input_path': None,
                     'error': None
                 }
+            save_jobs_to_disk()
                 
             def run_grid_generation():
                 try:
@@ -611,6 +627,7 @@ def api_convert():
                             if os.path.exists(output_path):
                                 sb = os.path.getsize(output_path)
                                 ACTIVE_JOBS[job_id]['size'] = f"{sb/1024/1024:.2f} MB"
+                    save_jobs_to_disk()
                 except Exception as e:
                     with JOBS_LOCK:
                         if ACTIVE_JOBS[job_id]['status'] != 'cancelled':
@@ -619,6 +636,7 @@ def api_convert():
                                 'error': str(e),
                                 'finished_time': time.time()
                             })
+                    save_jobs_to_disk()
             
             t = threading.Thread(target=run_grid_generation, daemon=True)
             t.start()
@@ -672,7 +690,9 @@ def api_convert():
 
     # Start the actual conversion thread
     # If the input file is in TEMP_DIR, it will be deleted automatically on complete/fail
-    start_conversion_thread(job_id, cmd, duration, output_path, input_path)
+    t = start_conversion_thread(job_id, cmd, duration, output_path, input_path)
+    if t is None:
+        return jsonify({"error": "Too many concurrent conversions. Max limit is 2. Please try again later."}), 429
     
     # Store processor details in job dict
     with JOBS_LOCK:
@@ -681,6 +701,7 @@ def api_convert():
             ACTIVE_JOBS[job_id]['sub_track'] = data.get("sub_track")
             ACTIVE_JOBS[job_id]['sub_file'] = data.get("sub_file")
             
+    save_jobs_to_disk()
     return jsonify({"job_id": job_id})
 
 @app.route("/api/status/<job_id>", methods=["GET"])

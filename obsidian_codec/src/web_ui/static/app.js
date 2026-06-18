@@ -47,6 +47,20 @@ document.addEventListener('DOMContentLoaded', () => {
   let batchResults = [];    // Array of { name, path, size, status, error }
   let isBatchMode = false;  // Whether we are doing a batch run
   let currentBasePayload = null;
+  let batchStartTime = null;
+
+  function formatRemainingTime(secs) {
+    if (secs < 60) {
+      return `~${Math.round(secs)}s remaining`;
+    }
+    const mins = Math.round(secs / 60);
+    if (mins < 60) {
+      return `~${mins} min remaining`;
+    }
+    const hrs = Math.floor(mins / 60);
+    const remMins = mins % 60;
+    return `~${hrs}h ${remMins}m remaining`;
+  }
 
   // DOM Elements
   const btnLocalMode = document.getElementById('btn-local-mode');
@@ -887,10 +901,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isBatchMode && batchQueue.length > 0) {
       batchIndex = 0;
       batchResults = [];
+      batchStartTime = Date.now();
       startNextBatchItem(payload);
     } else {
       batchQueue = [];
       isBatchMode = false;
+      batchStartTime = null;
       startJob(payload);
     }
   });
@@ -925,10 +941,20 @@ document.addEventListener('DOMContentLoaded', () => {
       loadingTxtLabel.textContent = `Batch [${batchIndex + 1}/${batchQueue.length}]`;
       document.getElementById('loading-txt-label').style.letterSpacing = '2px';
       consoleOutput.textContent = `[Batch Job] Starting file ${batchIndex + 1} of ${batchQueue.length}: ${filename}...`;
+      const batchWrap = document.getElementById('batch-progress-wrap');
+      const batchVal = document.getElementById('batch-progress-value');
+      if (batchWrap && batchVal) {
+        batchWrap.classList.remove('hidden');
+        batchVal.textContent = `${batchIndex} of ${batchQueue.length} done`;
+      }
     } else {
       loadingTxtLabel.textContent = "Loading";
       document.getElementById('loading-txt-label').style.letterSpacing = '7px';
       consoleOutput.textContent = "Connecting to pipeline service...";
+      const batchWrap = document.getElementById('batch-progress-wrap');
+      if (batchWrap) {
+        batchWrap.classList.add('hidden');
+      }
     }
     
     statusPercent.textContent = "0%";
@@ -990,6 +1016,28 @@ document.addEventListener('DOMContentLoaded', () => {
       statusSpeed.textContent = data.speed;
       statusEta.textContent = data.eta;
       statusSize.textContent = data.size;
+
+      if (isBatchMode && batchStartTime) {
+        const batchWrap = document.getElementById('batch-progress-wrap');
+        const batchVal = document.getElementById('batch-progress-value');
+        if (batchWrap && batchVal) {
+          batchWrap.classList.remove('hidden');
+          const elapsed = (Date.now() - batchStartTime) / 1000;
+          const completedCount = batchIndex;
+          const currentProgress = data.progress || 0;
+          const fractionalCompleted = completedCount + (currentProgress / 100);
+          let batchStatusText = `${batchIndex} of ${batchQueue.length} done`;
+          if (fractionalCompleted > 0) {
+            const avgDuration = elapsed / fractionalCompleted;
+            const remainingFiles = batchQueue.length - fractionalCompleted;
+            const etaSecs = remainingFiles * avgDuration;
+            batchStatusText += `, ${formatRemainingTime(etaSecs)}`;
+          } else {
+            batchStatusText += `, estimating...`;
+          }
+          batchVal.textContent = batchStatusText;
+        }
+      }
       
       // Update the live frame image preview if checked
       updatePreviewFrame();
