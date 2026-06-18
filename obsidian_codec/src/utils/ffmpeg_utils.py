@@ -5,10 +5,11 @@ import subprocess
 import threading
 import time
 import psutil
+from typing import List, Dict, Any, Optional, Tuple, Union
 
 # Active jobs tracking
 # Format: { job_id: { 'status': ..., 'progress': ..., 'speed': ..., 'eta': ..., 'size': ..., 'log': [], 'process': ..., 'output_path': ..., 'input_path': ..., 'error': ... } }
-ACTIVE_JOBS = {}
+ACTIVE_JOBS: Dict[str, Dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
 
 TEMP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "temp"))
@@ -16,11 +17,34 @@ OUTPUT_ROOT = os.path.abspath(os.environ.get("OUTPUT_ROOT", os.path.expanduser("
 OUTPUT_DIR = OUTPUT_ROOT
 
 # Allow 2 parallel conversions
+# NOTE: This Semaphore is in-memory (per-process). If deploying with multi-process
+# WSGI servers (e.g. Gunicorn with multiple workers), the cap will apply per-worker.
 CONVERSION_SEMAPHORE = threading.Semaphore(2)
 
 JOBS_FILE = os.path.join(TEMP_DIR, "active_jobs.json")
 
-def is_safe_path(path):
+def escape_ffmpeg_filter_path(path: str) -> str:
+    """Escapes special characters in path for FFmpeg filter graph (subtitles filter)."""
+    if not path:
+        return ""
+    # Replace backslashes with forward slashes for cross-platform stability
+    p = path.replace('\\', '/')
+    
+    # Escape special characters that are parsed by the filter graph option parser
+    # Characters that need escaping in filter graphs: colons, commas, semicolons, brackets
+    escaped = []
+    for char in p:
+        if char in (':', ',', ';', '[', ']'):
+            escaped.append('\\' + char)
+        elif char == "'":
+            # Escaping single quote in single quoted string literal in filtergraph:
+            # We break out of single quotes, insert an escaped single quote, and restart single quotes.
+            escaped.append("'\\\\''")
+        else:
+            escaped.append(char)
+    return "".join(escaped)
+
+def is_safe_path(path: Optional[str]) -> bool:
     if not path:
         return False
     try:
@@ -46,18 +70,20 @@ def is_safe_path(path):
         pass
     return False
 
-def save_jobs_to_disk():
+def save_jobs_to_disk() -> None:
     try:
         ensure_temp_dir()
         serializable = {}
         for jid, job in ACTIVE_JOBS.items():
             serializable[jid] = {k: v for k, v in job.items() if k != 'process'}
-        with open(JOBS_FILE, "w", encoding="utf-8") as f:
+        tmp_file = JOBS_FILE + ".tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(serializable, f, indent=2)
+        os.replace(tmp_file, JOBS_FILE)
     except Exception as e:
         print(f"Error saving jobs: {e}", file=sys.stderr)
 
-def load_jobs_from_disk():
+def load_jobs_from_disk() -> None:
     global ACTIVE_JOBS
     if os.path.exists(JOBS_FILE):
         try:
@@ -73,7 +99,7 @@ def load_jobs_from_disk():
         except Exception as e:
             print(f"Error loading jobs: {e}", file=sys.stderr)
 
-def is_safe_output_path(path):
+def is_safe_output_path(path: Optional[str]) -> bool:
     if not path:
         return False
     if not is_safe_path(path):
@@ -156,7 +182,7 @@ AUDIO_CODEC_MAP = {
 }
 
 
-def resolve_transcoding_codec(codec, codec_type, meta=None, audio_track_idx=None):
+def resolve_transcoding_codec(codec: str, codec_type: str, meta: Optional[Dict[str, Any]] = None, audio_track_idx: Optional[Union[int, str]] = None) -> str:
     if codec != "copy" or not meta:
         return codec
 
@@ -173,27 +199,28 @@ def resolve_transcoding_codec(codec, codec_type, meta=None, audio_track_idx=None
     return codec
 
 
-def get_compatible_transcoding_codecs(container, codec_choices, codec_type, meta=None, audio_track_idx=None):
-    rules = TRANSCODING_COMPATIBILITY_MATRIX.get(container.lower().lstrip("."))
-    allowed_codecs = rules.get(codec_type) if rules else None
-    if not allowed_codecs:
-        return list(codec_choices)
-
+def get_compatible_transcoding_codecs(container: str, codec_choices: List[str], codec_type: str, meta: Optional[Dict[str, Any]] = None, audio_track_idx: Optional[Union[int, str]] = None) -> List[str]:
     compatible = []
+    allowed_codecs = TRANSCODING_COMPATIBILITY_MATRIX.get(container.lower().lstrip("."), {}).get(codec_type, [])
+    # If container is not in matrix, fallback/allow
+    if not allowed_codecs:
+        return codec_choices
     for codec in codec_choices:
         check_codec = resolve_transcoding_codec(codec, codec_type, meta, audio_track_idx)
         if check_codec in allowed_codecs:
             compatible.append(codec)
     return compatible
 
-def ensure_temp_dir():
+def ensure_temp_dir() -> None:
     if not os.path.exists(TEMP_DIR):
         os.makedirs(TEMP_DIR)
 
-def cleanup_temp_dir():
-    """Removes all files in the temp directory."""
+def cleanup_temp_dir() -> None:
+    """Removes all files in the temp directory except active_jobs.json and csrf_secret.txt."""
     ensure_temp_dir()
     for filename in os.listdir(TEMP_DIR):
+        if filename in ("active_jobs.json", "csrf_secret.txt"):
+            continue
         file_path = os.path.join(TEMP_DIR, filename)
         try:
             if os.path.isfile(file_path) or os.path.islink(file_path):
@@ -204,7 +231,7 @@ def cleanup_temp_dir():
         except Exception as e:
             print(f"Failed to delete {file_path}. Reason: {e}", file=sys.stderr)
 
-def get_supported_hw_encoders():
+def get_supported_hw_encoders() -> List[str]:
     """Runs short tests to check which hardware encoders are supported by the system."""
     supported = []
     startupinfo = None
@@ -258,7 +285,7 @@ def get_supported_hw_encoders():
         
     return supported
 
-def get_job_status(job_id):
+def get_job_status(job_id: str) -> Optional[Dict[str, Any]]:
     with JOBS_LOCK:
         job = ACTIVE_JOBS.get(job_id)
         if not job:
@@ -266,7 +293,7 @@ def get_job_status(job_id):
         # Return a copy without the process object (which is not JSON serializable)
         return {k: v for k, v in job.items() if k != 'process'}
 
-def cancel_job(job_id):
+def cancel_job(job_id: str) -> Tuple[bool, str]:
     with JOBS_LOCK:
         job = ACTIVE_JOBS.get(job_id)
         if not job:
@@ -318,7 +345,7 @@ def cancel_job(job_id):
         save_jobs_to_disk()
         return True, "Job cancelled"
 
-def run_ffprobe(args):
+def run_ffprobe(args: List[str]) -> Dict[str, Any]:
     """Runs ffprobe with arguments and returns the parsed JSON output."""
     cmd = ["ffprobe", "-v", "quiet", "-print_format", "json"] + args
     try:
@@ -336,7 +363,7 @@ def run_ffprobe(args):
         print(f"ffprobe exception: {e}", file=sys.stderr)
         return {}
 
-def probe_file(file_path):
+def probe_file(file_path: str) -> Dict[str, Any]:
     """Probes a file and returns details about streams, format, and chapters."""
     if not os.path.exists(file_path):
         return {"error": "File does not exist"}
@@ -420,7 +447,7 @@ def probe_file(file_path):
         
     return result
 
-def run_ffmpeg_subprocess(job_id, cmd, total_duration, output_path, input_path):
+def run_ffmpeg_subprocess(job_id: str, cmd: List[str], total_duration: float, output_path: str, input_path: Optional[str]) -> None:
     """Runs the ffmpeg command as a subprocess and parses progress logs."""
     ensure_temp_dir()
     
@@ -620,7 +647,7 @@ def run_ffmpeg_subprocess(job_id, cmd, total_duration, output_path, input_path):
             except Exception:
                 pass
 
-def start_conversion_thread(job_id, cmd, total_duration, output_path, input_path=None):
+def start_conversion_thread(job_id: str, cmd: List[str], total_duration: float, output_path: str, input_path: Optional[str] = None) -> Optional[threading.Thread]:
     """Starts the FFmpeg process in a background thread."""
     ensure_temp_dir()
     
@@ -658,7 +685,7 @@ def start_conversion_thread(job_id, cmd, total_duration, output_path, input_path
     t.start()
     return t
 
-def generate_thumbnail_grid(input_path, output_path, rows=4, cols=4, duration=0):
+def generate_thumbnail_grid(input_path: str, output_path: str, rows: int = 4, cols: int = 4, duration: float = 0) -> str:
     """Generates a contact sheet thumbnail grid using FFmpeg select and tile filters."""
     if duration <= 0:
         meta = probe_file(input_path)
@@ -704,7 +731,7 @@ def generate_thumbnail_grid(input_path, output_path, rows=4, cols=4, duration=0)
         raise RuntimeError(f"Thumbnail grid generation failed: {res.stderr}")
     return output_path
 
-def get_detected_gpus():
+def get_detected_gpus() -> List[str]:
     """Returns a list of physical GPU names detected on the system."""
     gpus = []
     if sys.platform == "win32":
@@ -744,7 +771,7 @@ def get_detected_gpus():
     return gpus
 
 
-def validate_transcoding_combination(container, vcodec, acodec, meta=None, audio_track_idx=None):
+def validate_transcoding_combination(container: str, vcodec: str, acodec: str, meta: Optional[Dict[str, Any]] = None, audio_track_idx: Optional[Union[int, str]] = None) -> Tuple[bool, str]:
     """
     Checks if the selected video and audio codecs are compatible with the target container format.
     Returns (is_valid, error_message).

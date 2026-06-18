@@ -23,7 +23,8 @@ from obsidian_codec.src.utils.ffmpeg_utils import (
     generate_thumbnail_grid,
     get_supported_hw_encoders,
     get_compatible_transcoding_codecs,
-    validate_transcoding_combination
+    validate_transcoding_combination,
+    escape_ffmpeg_filter_path
 )
 
 # Enforce UTF-8 stdout/stderr on Windows to render unicode banners
@@ -335,7 +336,7 @@ def build_ffmpeg_convert_cmd(input_path, output_path, vcodec, acodec, crf, prese
     # Subtitle track mapping
     if sub_track is not None and sub_track != -1:
         if sub_mode == "hard":
-            escaped_path = input_path.replace("\\", "/").replace(":", "\\:")
+            escaped_path = escape_ffmpeg_filter_path(input_path)
             sub_vf = f"subtitles='{escaped_path}':si={sub_track}"
             vf_arg = sub_vf
             for i, arg in enumerate(cmd):
@@ -420,23 +421,35 @@ def run_command_watch(args):
         while True:
             try:
                 candidates = []
-                for f in os.listdir(watch_dir):
-                    f_path = os.path.join(watch_dir, f)
-                    if os.path.isfile(f_path) and f not in processed_files:
-                        ext = os.path.splitext(f)[1].lower()
-                        if ext in [".mp4", ".mkv", ".avi", ".mov", ".webm", ".ts", ".flv", ".ogg", ".m4v"]:
-                            candidates.append(f)
-                            
-                for f in candidates:
-                    f_path = os.path.join(watch_dir, f)
-                    console.print(f"[cyan]Detected file: {f}. Checking stability...[/cyan]")
+                for root, dirs, files in os.walk(watch_dir):
+                    # Prune converted and done subdirectories in-place to avoid scanning inside them
+                    dirs[:] = [d for d in dirs if not (
+                        (d_path := os.path.abspath(os.path.join(root, d))) == out_dir or
+                        d_path == done_dir or
+                        d_path.startswith(out_dir + os.sep) or
+                        d_path.startswith(done_dir + os.sep)
+                    )]
+                    
+                    for f in files:
+                        f_path = os.path.abspath(os.path.join(root, f))
+                        if f_path not in processed_files:
+                            ext = os.path.splitext(f)[1].lower()
+                            if ext in [".mp4", ".mkv", ".avi", ".mov", ".webm", ".ts", ".flv", ".ogg", ".m4v"]:
+                                candidates.append(f_path)
+                                
+                for f_path in candidates:
+                    rel_path = os.path.relpath(f_path, watch_dir)
+                    console.print(f"[cyan]Detected file: {rel_path}. Checking stability...[/cyan]")
                     if check_file_stable(f_path):
-                        console.print(f"[green]File stable. Starting conversion for {f}...[/green]")
+                        console.print(f"[green]File stable. Starting conversion for {rel_path}...[/green]")
                         
-                        # Build target output path
-                        base_name, target_ext = os.path.splitext(f)
+                        # Build target output path preserving directory structure
+                        rel_dir = os.path.dirname(rel_path)
+                        base_name, target_ext = os.path.splitext(os.path.basename(f_path))
                         out_ext = ".mp4" if watch_preset == "youtube" else target_ext
-                        out_file = os.path.join(out_dir, f"{base_name}_obsidian{out_ext}")
+                        
+                        out_file = os.path.join(out_dir, rel_dir, f"{base_name}_obsidian{out_ext}")
+                        os.makedirs(os.path.dirname(out_file), exist_ok=True)
                         
                         meta = probe_file(f_path)
                         duration = meta.get("duration", 0)
@@ -449,11 +462,13 @@ def run_command_watch(args):
                         # Run the conversion synchronously in terminal and block/display progress
                         run_ffmpeg_with_cli_progress(cmd, duration, out_file)
                         
-                        # Move original file to done
-                        done_file = os.path.join(done_dir, f)
+                        # Move original file to done preserving directory structure
+                        done_file = os.path.join(done_dir, rel_path)
+                        os.makedirs(os.path.dirname(done_file), exist_ok=True)
+                        
                         if os.path.exists(done_file):
-                            base_d, ext_d = os.path.splitext(f)
-                            done_file = os.path.join(done_dir, f"{base_d}_{int(time.time())}{ext_d}")
+                            base_d, ext_d = os.path.splitext(done_file)
+                            done_file = f"{base_d}_{int(time.time())}{ext_d}"
                         
                         import shutil
                         try:
@@ -461,10 +476,10 @@ def run_command_watch(args):
                             console.print(f"[green]Moved original input to: {done_file}[/green]")
                         except Exception as me:
                             console.print(f"[bold red]Error moving file to done:[/bold red] {me}")
-                            processed_files.add(f)
+                            processed_files.add(f_path)
                             
                     else:
-                        console.print(f"[yellow]File {f} is not stable yet (still writing). Skipping...[/yellow]")
+                        console.print(f"[yellow]File {rel_path} is not stable yet (still writing). Skipping...[/yellow]")
                         
             except Exception as loop_err:
                 console.print(f"[bold red]Error in watch loop:[/bold red] {loop_err}")
@@ -524,6 +539,8 @@ def run_interactive_wizard():
 
         container = Prompt.ask("Select output container", choices=container_choices, default="mp4")
         video_codec_choices, audio_codec_choices = compatible_codec_choices(container)
+        if "copy" in video_codec_choices:
+            console.print("\n[bold green]⚡ Speed Tip:[/bold green] The input video codec matches the container's capabilities. Selecting [cyan]copy[/cyan] as the video codec will copy the stream directly without re-encoding, which is lightning fast and preserves original quality!\n")
         vcodec = Prompt.ask("Select video codec", choices=video_codec_choices, default=select_default(video_codec_choices, "libx264"))
         resolution = Prompt.ask("Select target resolution", choices=["original", "3840x2160", "1920x1080", "1280x720", "854x480"], default="original")
         preset = Prompt.ask("Select encoding preset", choices=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], default="medium")
@@ -663,7 +680,7 @@ def run_interactive_wizard():
                 run_ffmpeg_with_cli_progress(cmd, info['duration'], out_path)
             else:
                 out_path = os.path.join(input_dir, f"{base_name}_burned{ext}")
-                escaped_sub = sub_path.replace("\\", "/").replace(":", "\\:")
+                escaped_sub = escape_ffmpeg_filter_path(sub_path)
                 cmd = ["ffmpeg", "-y", "-i", filepath, "-vf", f"subtitles='{escaped_sub}'", "-c:a", "copy"]
                 if out_path.lower().endswith(".m4v"):
                     cmd += ["-f", "mp4"]

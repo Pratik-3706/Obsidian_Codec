@@ -35,7 +35,8 @@ from obsidian_codec.src.utils.ffmpeg_utils import (
     is_safe_path,
     is_safe_output_path,
     OUTPUT_DIR,
-    save_jobs_to_disk
+    save_jobs_to_disk,
+    escape_ffmpeg_filter_path
 )
 
 app = Flask(
@@ -47,8 +48,31 @@ app = Flask(
 # Enable template auto-reload
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 
+def get_or_create_csrf_token() -> str:
+    ensure_temp_dir()
+    csrf_file = os.path.join(TEMP_DIR, "csrf_secret.txt")
+    if os.path.exists(csrf_file):
+        try:
+            with open(csrf_file, "r", encoding="utf-8") as f:
+                token = f.read().strip()
+                if token:
+                    return token
+        except Exception as e:
+            print(f"Error reading CSRF secret file: {e}", file=sys.stderr)
+            
+    # Generate new one
+    token = secrets.token_urlsafe(32)
+    try:
+        tmp_file = csrf_file + ".tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            f.write(token)
+        os.replace(tmp_file, csrf_file)
+    except Exception as e:
+        print(f"Error writing CSRF secret file: {e}", file=sys.stderr)
+    return token
+
 # CSRF protection token
-app.config["CSRF_TOKEN"] = secrets.token_urlsafe(32)
+app.config["CSRF_TOKEN"] = get_or_create_csrf_token()
 
 # Rate limiter setup
 limiter = Limiter(
@@ -67,11 +91,12 @@ def security_checks():
         
     # 2. CSRF Protection for state-changing methods
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
-        token = request.headers.get("X-CSRF-Token") or request.args.get("csrf_token")
+        token = request.headers.get("X-CSRF-Token")
         if not token:
             try:
-                if request.is_json and request.json:
-                    token = request.json.get("csrf_token")
+                json_data = request.get_json(silent=True)
+                if json_data:
+                    token = json_data.get("csrf_token")
             except Exception:
                 pass
             if not token and request.form:
@@ -460,7 +485,7 @@ def api_convert():
             if sub_track is not None and sub_track != "" and int(sub_track) != -1:
                 sub_idx = int(sub_track)
                 if sub_mode == "hard":
-                    escaped_path = input_path.replace("\\", "/").replace(":", "\\:")
+                    escaped_path = escape_ffmpeg_filter_path(input_path)
                     sub_vf = f"subtitles='{escaped_path}':si={sub_idx}"
                     # Find if we already have -vf scale
                     # Subtitles filter must run after scaling
@@ -668,7 +693,7 @@ def api_convert():
             sub_mode = data.get("sub_mode", "soft")
             if sub_mode == "hard":
                 cmd = ["ffmpeg", "-y", "-i", input_path]
-                escaped_sub = sub_file.replace("\\", "/").replace(":", "\\:")
+                escaped_sub = escape_ffmpeg_filter_path(sub_file)
                 cmd += ["-vf", f"subtitles='{escaped_sub}'", "-c:a", "copy"]
                 if output_path.lower().endswith(".m4v"):
                     cmd += ["-f", "mp4"]
@@ -898,7 +923,14 @@ def api_preview():
 
 @app.route("/api/cleanup-session", methods=["POST"])
 def api_cleanup_session():
-    session_id = request.args.get("session_id") or (request.json or {}).get("session_id")
+    session_id = request.form.get("session_id")
+    if not session_id:
+        try:
+            json_data = request.get_json(silent=True)
+            if json_data:
+                session_id = json_data.get("session_id")
+        except Exception:
+            pass
     if session_id:
         safe_id = "".join([c for c in session_id if c.isalnum() or c in "-_"]).strip()
         session_dir = os.path.abspath(os.path.join(TEMP_DIR, f"session_{safe_id}"))
@@ -921,8 +953,7 @@ def api_quit():
     threading.Thread(target=shutdown, daemon=True).start()
     return jsonify({"success": True, "message": "Server shutting down."})
 
-if __name__ == "__main__":
-    import threading
+def main() -> None:
     import webbrowser
     ensure_temp_dir()
     cleanup_temp_dir() # Initial cleanup on launch
@@ -940,3 +971,6 @@ if __name__ == "__main__":
     # Run the server
     DEBUG = os.environ.get("OBSIDIAN_CODEC_DEBUG", "0") == "1"
     app.run(host="127.0.0.1", port=5000, debug=DEBUG, use_reloader=False)
+
+if __name__ == "__main__":
+    main()

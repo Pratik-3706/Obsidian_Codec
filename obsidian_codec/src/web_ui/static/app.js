@@ -110,6 +110,131 @@ document.addEventListener('DOMContentLoaded', () => {
   const customOutputPath = document.getElementById('custom-output-path');
   const btnStartProcess = document.getElementById('btn-start-process');
 
+  // --- Output Path Preview & Stream Copy Suggestions ---
+  function updateOutputPathPreview() {
+    const previewEl = document.getElementById('output-path-preview');
+    const previewValEl = document.getElementById('output-path-preview-value');
+    if (!previewEl || !previewValEl) return;
+
+    if (!sourceFilePath) {
+      previewEl.classList.add('hidden');
+      return;
+    }
+
+    let resolvedPath = '';
+    const customVal = customOutputPath.value.trim();
+
+    if (customVal) {
+      resolvedPath = customVal;
+    } else {
+      let inputDir = '';
+      let baseName = '';
+      let ext = '';
+      
+      const lastSlash = Math.max(sourceFilePath.lastIndexOf('/'), sourceFilePath.lastIndexOf('\\'));
+      if (lastSlash !== -1) {
+        inputDir = sourceFilePath.substring(0, lastSlash);
+        const fileName = sourceFilePath.substring(lastSlash + 1);
+        const dotIdx = fileName.lastIndexOf('.');
+        if (dotIdx !== -1) {
+          baseName = fileName.substring(0, dotIdx);
+          ext = fileName.substring(dotIdx + 1);
+        } else {
+          baseName = fileName;
+        }
+      } else {
+        const dotIdx = sourceFilePath.lastIndexOf('.');
+        if (dotIdx !== -1) {
+          baseName = sourceFilePath.substring(0, dotIdx);
+          ext = sourceFilePath.substring(dotIdx + 1);
+        } else {
+          baseName = sourceFilePath;
+        }
+      }
+
+      let outDir = inputDir;
+      if (!isLocalMode) {
+        outDir = `[Temp Session Folder]\\session_${sessionId.substring(0, 8)}...`;
+      }
+
+      const activePane = document.querySelector('.tab-pane.active');
+      const activeTabId = activePane ? activePane.id : 'tab-convert';
+
+      if (activeTabId === 'tab-convert') {
+        const format = document.getElementById('conv-format').value;
+        resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_obsidian.' + format;
+      } else if (activeTabId === 'tab-extract') {
+        const type = document.getElementById('extract-element-type').value;
+        if (type === 'audio') {
+          const acodec = document.getElementById('conv-acodec') ? document.getElementById('conv-acodec').value : 'mp3';
+          const outExt = acodec.replace('libmp3lame', 'mp3').replace('libopus', 'opus').replace('libvorbis', 'ogg');
+          resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_extracted.' + outExt;
+        } else if (type === 'subtitles') {
+          const subFormat = document.getElementById('extract-sub-format').value;
+          const outExt = subFormat.includes('vtt') ? 'vtt' : 'srt';
+          resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_subs.' + outExt;
+        } else if (type === 'chapters') {
+          resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_chapters.json';
+        } else if (type === 'frames') {
+          const imgFormat = document.getElementById('extract-img-format').value;
+          const imgMode = document.getElementById('extract-img-mode').value;
+          if (imgMode === 'gif') {
+            resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_animated.gif';
+          } else if (imgMode === 'interval') {
+            resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_frame_%04d.' + imgFormat;
+          } else {
+            resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_frame.' + imgFormat;
+          }
+        }
+      } else if (activeTabId === 'tab-merge') {
+        const outFormat = ext || 'mkv';
+        resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_obsidian.' + outFormat;
+      } else if (activeTabId === 'tab-grid') {
+        resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_grid.png';
+      }
+    }
+
+    previewValEl.textContent = resolvedPath;
+    previewEl.classList.remove('hidden');
+  }
+
+  function checkStreamCopySuggestion() {
+    const tipEl = document.getElementById('stream-copy-tip');
+    if (!tipEl) return;
+
+    if (!probedData || !probedData.video_streams || probedData.video_streams.length === 0) {
+      tipEl.classList.add('hidden');
+      return;
+    }
+
+    const format = document.getElementById('conv-format').value.toLowerCase();
+    const vcodec = document.getElementById('conv-vcodec').value;
+
+    if (vcodec === 'copy') {
+      tipEl.classList.add('hidden');
+      return;
+    }
+
+    const srcVideoCodec = probedData.video_streams[0].codec_name.toLowerCase();
+    const CONTAINER_VIDEO_COMPATIBILITY = {
+      'mp4': ['h264', 'hevc', 'h265', 'vp9', 'av1', 'mpeg4'],
+      'm4v': ['h264', 'hevc', 'h265', 'vp9', 'av1', 'mpeg4'],
+      'mov': ['h264', 'hevc', 'h265', 'prores', 'mpeg4', 'vp9', 'av1'],
+      'mkv': ['h264', 'hevc', 'h265', 'vp9', 'av1', 'prores', 'mpeg4', 'vp8'],
+      'webm': ['vp8', 'vp9', 'av1'],
+      'ts': ['h264', 'hevc', 'h265', 'mpeg4'],
+      'avi': ['h264', 'mpeg4'],
+      'flv': ['h264', 'mpeg4']
+    };
+
+    const compatibleCodecs = CONTAINER_VIDEO_COMPATIBILITY[format] || [];
+    if (compatibleCodecs.includes(srcVideoCodec)) {
+      tipEl.classList.remove('hidden');
+    } else {
+      tipEl.classList.add('hidden');
+    }
+  }
+
   // Modals
   const processingModal = document.getElementById('processing-modal');
   const loadingTxtLabel = document.getElementById('loading-txt-label');
@@ -139,6 +264,7 @@ document.addEventListener('DOMContentLoaded', () => {
     localPathContainer.classList.add('active');
     webUploadContainer.classList.remove('active');
     resetInputs();
+    updateOutputPathPreview();
   });
 
   btnUploadMode.addEventListener('click', () => {
@@ -148,6 +274,7 @@ document.addEventListener('DOMContentLoaded', () => {
     localPathContainer.classList.remove('active');
     webUploadContainer.classList.add('active');
     resetInputs();
+    updateOutputPathPreview();
   });
 
   function resetInputs() {
@@ -500,10 +627,10 @@ document.addEventListener('DOMContentLoaded', () => {
     
     updateCodecOptionsForFormat();
     checkTranscodingCompatibility();
+    updateOutputPathPreview();
     settingsPanel.scrollIntoView({ behavior: 'smooth' });
   }
 
-  // --- 5. Tabs Management ---
   tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       tabBtns.forEach(b => b.classList.remove('active'));
@@ -512,6 +639,7 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.classList.add('active');
       activeTab = btn.getAttribute('data-tab');
       document.getElementById(activeTab).classList.add('active');
+      updateOutputPathPreview();
     });
   });
 
@@ -733,14 +861,41 @@ document.addEventListener('DOMContentLoaded', () => {
       btnStartProcess.style.opacity = '';
       btnStartProcess.style.cursor = '';
     }
+    checkStreamCopySuggestion();
   }
+
+  customOutputPath.addEventListener('input', updateOutputPathPreview);
 
   document.getElementById('conv-format').addEventListener('change', () => {
     updateCodecOptionsForFormat();
     checkTranscodingCompatibility();
+    updateOutputPathPreview();
   });
-  document.getElementById('conv-vcodec').addEventListener('change', checkTranscodingCompatibility);
-  document.getElementById('conv-acodec').addEventListener('change', checkTranscodingCompatibility);
+  document.getElementById('conv-vcodec').addEventListener('change', () => {
+    checkTranscodingCompatibility();
+    updateOutputPathPreview();
+  });
+  document.getElementById('conv-acodec').addEventListener('change', () => {
+    checkTranscodingCompatibility();
+    updateOutputPathPreview();
+  });
+
+  const extractTypeEl = document.getElementById('extract-element-type');
+  if (extractTypeEl) {
+    extractTypeEl.addEventListener('change', updateOutputPathPreview);
+  }
+  const extractSubFormatEl = document.getElementById('extract-sub-format');
+  if (extractSubFormatEl) {
+    extractSubFormatEl.addEventListener('change', updateOutputPathPreview);
+  }
+  const extractImgFormatEl = document.getElementById('extract-img-format');
+  if (extractImgFormatEl) {
+    extractImgFormatEl.addEventListener('change', updateOutputPathPreview);
+  }
+  const extractImgModeEl = document.getElementById('extract-img-mode');
+  if (extractImgModeEl) {
+    extractImgModeEl.addEventListener('change', updateOutputPathPreview);
+  }
 
   // Frames Mode fields visibility
   framesMode.addEventListener('change', () => {
@@ -1386,7 +1541,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.addEventListener('beforeunload', () => {
     if (isDownloading) return;
-    navigator.sendBeacon(`/api/cleanup-session?session_id=${sessionId}&csrf_token=${encodeURIComponent(csrfToken)}`);
+    const formData = new FormData();
+    formData.append('session_id', sessionId);
+    formData.append('csrf_token', csrfToken);
+    navigator.sendBeacon('/api/cleanup-session', formData);
   });
 
   // --- 14. Engine Quit / Termination Endpoint ---

@@ -255,6 +255,10 @@
                     <option value="libxvid">libxvid (Xvid Legacy)</option>
                     <option value="copy">Direct Copy (Mux streams directly)</option>
                   </select>
+                  <div id="stream-copy-tip" class="copy-tip-box hidden">
+                    <div class="tip-icon">⚡</div>
+                    <div class="tip-text">Input stream matches output format. We suggest selecting <strong>Direct Copy</strong> for lightning-fast encoding without quality loss!</div>
+                  </div>
                 </div>
 
                 <div class="field-item">
@@ -504,6 +508,10 @@
               <label for="custom-output-path">Destination Path (Optional)</label>
               <input type="text" id="custom-output-path" class="form-input" placeholder="Leave empty for source folder + suffix">
               <p class="field-tip">Absolute folder path where output will be saved directly on your hard disk.</p>
+              <div id="output-path-preview" class="path-preview hidden">
+                <span class="preview-label">Resolved Destination:</span>
+                <span class="preview-value" id="output-path-preview-value"></span>
+              </div>
             </div>
 
             <!-- Start Process Trigger Button -->
