@@ -511,7 +511,7 @@ def generate_thumbnail_grid(input_path, output_path, rows=4, cols=4, duration=0)
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", startupinfo=startupinfo)
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", startupinfo=startupinfo, timeout=60)
     if res.returncode != 0:
         raise RuntimeError(f"Thumbnail grid generation failed: {res.stderr}")
     return output_path
