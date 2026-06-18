@@ -24,6 +24,8 @@ OUTPUT_DIR = OUTPUT_ROOT
 CONVERSION_SEMAPHORE = threading.Semaphore(2)
 
 JOBS_FILE = os.path.join(TEMP_DIR, "active_jobs.json")
+CSRF_FILE = os.path.join(TEMP_DIR, "csrf_secret.txt")
+BEARER_FILE = os.path.join(TEMP_DIR, "bearer_token.txt")
 
 
 def escape_ffmpeg_filter_path(path: str) -> str:
@@ -255,10 +257,15 @@ def ensure_temp_dir() -> None:
 
 
 def cleanup_temp_dir() -> None:
-    """Removes all files in the temp directory except active_jobs.json and csrf_secret.txt."""
+    """Removes all files in the temp directory except whitelisted config files."""
     ensure_temp_dir()
+    whitelist = {
+        os.path.basename(JOBS_FILE),
+        os.path.basename(CSRF_FILE),
+        os.path.basename(BEARER_FILE),
+    }
     for filename in os.listdir(TEMP_DIR):
-        if filename in ("active_jobs.json", "csrf_secret.txt"):
+        if filename in whitelist:
             continue
         file_path = os.path.join(TEMP_DIR, filename)
         try:

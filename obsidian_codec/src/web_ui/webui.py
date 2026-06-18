@@ -43,6 +43,8 @@ from obsidian_codec.src.utils.ffmpeg_utils import (
     escape_ffmpeg_filter_path,
     map_codec_and_build_args,
     get_input_decoder_args,
+    CSRF_FILE,
+    BEARER_FILE,
 )
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -53,10 +55,9 @@ app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 def get_or_create_csrf_token() -> str:
     ensure_temp_dir()
-    csrf_file = os.path.join(TEMP_DIR, "csrf_secret.txt")
-    if os.path.exists(csrf_file):
+    if os.path.exists(CSRF_FILE):
         try:
-            with open(csrf_file, "r", encoding="utf-8") as f:
+            with open(CSRF_FILE, "r", encoding="utf-8") as f:
                 token = f.read().strip()
                 if token:
                     return token
@@ -66,10 +67,10 @@ def get_or_create_csrf_token() -> str:
     # Generate new one
     token = secrets.token_urlsafe(32)
     try:
-        tmp_file = csrf_file + ".tmp"
+        tmp_file = CSRF_FILE + ".tmp"
         with open(tmp_file, "w", encoding="utf-8") as f:
             f.write(token)
-        os.replace(tmp_file, csrf_file)
+        os.replace(tmp_file, CSRF_FILE)
     except Exception as e:
         print(f"Error writing CSRF secret file: {e}", file=sys.stderr)
     return token
@@ -84,10 +85,9 @@ def get_bearer_token() -> str:
     if env_token:
         return env_token
     ensure_temp_dir()
-    token_file = os.path.join(TEMP_DIR, "bearer_token.txt")
-    if os.path.exists(token_file):
+    if os.path.exists(BEARER_FILE):
         try:
-            with open(token_file, "r", encoding="utf-8") as f:
+            with open(BEARER_FILE, "r", encoding="utf-8") as f:
                 token = f.read().strip()
                 if token:
                     return token
@@ -97,10 +97,10 @@ def get_bearer_token() -> str:
     # Generate new one
     token = secrets.token_urlsafe(32)
     try:
-        tmp_file = token_file + ".tmp"
+        tmp_file = BEARER_FILE + ".tmp"
         with open(tmp_file, "w", encoding="utf-8") as f:
             f.write(token)
-        os.replace(tmp_file, token_file)
+        os.replace(tmp_file, BEARER_FILE)
     except Exception as e:
         print(f"Error writing Bearer secret file: {e}", file=sys.stderr)
     return token
