@@ -75,7 +75,17 @@ def display_file_probe(file_path: str) -> Optional[Dict[str, Any]]:
     fmt_table.add_row("Filename", info["filename"])
     fmt_table.add_row("File Path", info["filepath"])
     fmt_table.add_row("Duration", duration_str)
-    fmt_table.add_row("Size", f"{info['size'] / (1024 * 1024):.2f} MB")
+    sb = info["size"]
+    if sb < 1024:
+        size_str = f"{sb} B"
+    elif sb < 1024 * 1024:
+        size_str = f"{sb / 1024:.2f} KB"
+    elif sb < 1024 * 1024 * 1024:
+        size_str = f"{sb / (1024 * 1024):.2f} MB"
+    else:
+        size_str = f"{sb / (1024 * 1024 * 1024):.2f} GB"
+
+    fmt_table.add_row("Size", size_str)
     fmt_table.add_row("Bitrate", f"{info['bitrate'] / 1000:.1f} kbps" if info["bitrate"] else "N/A")
     fmt_table.add_row("Format", info["format_long_name"])
 
