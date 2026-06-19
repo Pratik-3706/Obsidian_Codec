@@ -34,14 +34,19 @@ https://github.com/user-attachments/assets/63ec4a9e-6dff-4de0-9260-91df05b140a9
 https://github.com/user-attachments/assets/537771b5-144a-4471-9f42-6e87c5c26389
 
 ### 🎨 Web UI Conversion Options (`convertion_options.mp4`)
-*(Showing available formats, not a conversion demo)*
+*(Showing available formats)*
 
-https://github.com/user-attachments/assets/9500ab50-9d60-4007-a84e-52c4bfd6228c
+https://github.com/user-attachments/assets/41d486a8-e3dc-4921-99de-615585561681
 
 ### ⚡ Various Options Tab Tour (`verious_options.mp4`)
-*(Showing the layout of Convert, Audio, Mute, Mux Subs, GIFs, Contact Sheet, and Merge tabs; not a conversion demo)*
+*(Showing the layout of Convert, Audio, Mute, Mux Subs, GIFs, Contact Sheet, and Merge tabs)*
 
 https://github.com/user-attachments/assets/ea75c6aa-2f9d-4ede-9930-3ac2ecaa3ea6
+
+### 🚀 GPU Options (`gpu_options.mp4`)
+*(Showing GPU hardware-acceleration options)*
+
+https://github.com/user-attachments/assets/29adcb04-900c-48b1-9b74-892db008a3d8
 
 ---
 
