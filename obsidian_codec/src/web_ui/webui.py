@@ -342,16 +342,68 @@ def api_convert() -> Any:
 
     custom_output = data.get("output_path")
 
+    # Strip surrounding quotes and normalize separators for cross-platform compatibility
     if custom_output:
-        if not is_safe_output_path(custom_output):
-            return jsonify({"error": "Access denied: custom output path is invalid or outside sandbox"}), 400
-        out_dir = os.path.dirname(custom_output)
-        if out_dir and not os.path.exists(out_dir):
-            try:
-                os.makedirs(out_dir)
-            except Exception:
-                pass
-        output_path = custom_output
+        custom_output = custom_output.strip().strip('"').strip("'").strip()
+        # Normalize path separators to OS-native (handles / on Windows and \ on Unix)
+        custom_output = os.path.normpath(custom_output)
+        if not custom_output:
+            custom_output = None
+
+    if custom_output:
+        # Determine if user provided a directory path vs a full file path.
+        # Treat as directory if: it already exists as a dir, ends with a separator,
+        # or the final path component has no file extension.
+        custom_basename = os.path.basename(custom_output)
+        custom_ext = os.path.splitext(custom_basename)[1]
+        is_dir_path = os.path.isdir(custom_output) or not custom_ext
+
+        if is_dir_path:
+            # User provided a directory — validate the directory, then auto-generate filename
+            out_dir = custom_output
+            if not is_safe_path(out_dir):
+                return jsonify({"error": "Access denied: custom output directory is invalid or outside sandbox"}), 400
+            if not os.path.exists(out_dir):
+                try:
+                    os.makedirs(out_dir)
+                except Exception:
+                    pass
+            # Generate filename within the directory based on operation type
+            if operation == "extract_audio":
+                out_ext = "." + data.get("audio_codec", "mp3").replace("libmp3lame", "mp3").replace(
+                    "libopus", "opus"
+                ).replace("libvorbis", "ogg")
+                output_path = os.path.join(out_dir, f"{base_name}_extracted{out_ext}")
+            elif operation == "extract_subs":
+                out_ext = ".srt" if "vtt" not in data.get("sub_format", "srt") else ".vtt"
+                output_path = os.path.join(out_dir, f"{base_name}_subs{out_ext}")
+            elif operation == "extract_chapters":
+                output_path = os.path.join(out_dir, f"{base_name}_chapters.json")
+            elif operation == "extract_frames":
+                img_format = data.get("image_format", "png")
+                img_mode = data.get("image_mode", "single")
+                if img_mode == "gif":
+                    output_path = os.path.join(out_dir, f"{base_name}_animated.gif")
+                elif img_mode == "interval":
+                    output_path = os.path.join(out_dir, f"{base_name}_frame_%04d.{img_format}")
+                else:
+                    output_path = os.path.join(out_dir, f"{base_name}_frame.{img_format}")
+            elif operation == "thumbnail_grid":
+                output_path = os.path.join(out_dir, f"{base_name}_grid.png")
+            else:
+                out_format = data.get("format", ext.lstrip(".") if ext else "mp4")
+                output_path = os.path.join(out_dir, f"{base_name}_obsidian.{out_format}")
+        else:
+            # User provided a full file path with extension
+            if not is_safe_output_path(custom_output):
+                return jsonify({"error": "Access denied: custom output path is invalid or outside sandbox"}), 400
+            out_dir = os.path.dirname(custom_output)
+            if out_dir and not os.path.exists(out_dir):
+                try:
+                    os.makedirs(out_dir)
+                except Exception:
+                    pass
+            output_path = custom_output
     else:
         # Save in session_dir if input is located in the temp folder tree
         out_dir = session_dir if os.path.abspath(TEMP_DIR) in os.path.abspath(input_path) else input_dir

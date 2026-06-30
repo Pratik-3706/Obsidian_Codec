@@ -122,9 +122,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let resolvedPath = '';
-    const customVal = customOutputPath.value.trim();
+    const customVal = customOutputPath.value.trim().replace(/^["']+|["']+$/g, '').trim();
 
-    if (customVal) {
+    // Check if custom value is a full file path (has extension) or a directory
+    const customLastSeg = customVal ? customVal.replace(/[\/\\]+$/, '').split(/[\/\\]/).pop() || '' : '';
+    const customIsFile = customVal && /\.[a-zA-Z0-9]{1,5}$/.test(customLastSeg);
+
+    if (customVal && customIsFile) {
       resolvedPath = customVal;
     } else {
       let inputDir = '';
@@ -153,44 +157,51 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       let outDir = inputDir;
-      if (!isLocalMode) {
+      if (customVal && !customIsFile) {
+        outDir = customVal.replace(/[\/\\]+$/, '');
+      } else if (!isLocalMode) {
         outDir = `[Temp Session Folder]\\session_${sessionId.substring(0, 8)}...`;
       }
+
+      // Detect the path separator from the source or custom path for cross-platform display
+      const sep = (customVal && customVal.includes('/')) ? '/' :
+                  (customVal && customVal.includes('\\')) ? '\\' :
+                  (sourceFilePath.includes('\\')) ? '\\' : '/';
 
       const activePane = document.querySelector('.tab-pane.active');
       const activeTabId = activePane ? activePane.id : 'tab-convert';
 
       if (activeTabId === 'tab-convert') {
         const format = document.getElementById('conv-format').value;
-        resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_obsidian.' + format;
+        resolvedPath = (outDir ? outDir + sep : '') + baseName + '_obsidian.' + format;
       } else if (activeTabId === 'tab-extract') {
         const type = document.getElementById('extract-element-type').value;
         if (type === 'audio') {
           const acodec = document.getElementById('conv-acodec') ? document.getElementById('conv-acodec').value : 'mp3';
           const outExt = acodec.replace('libmp3lame', 'mp3').replace('libopus', 'opus').replace('libvorbis', 'ogg');
-          resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_extracted.' + outExt;
+          resolvedPath = (outDir ? outDir + sep : '') + baseName + '_extracted.' + outExt;
         } else if (type === 'subtitles') {
           const subFormat = document.getElementById('extract-sub-format').value;
           const outExt = subFormat.includes('vtt') ? 'vtt' : 'srt';
-          resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_subs.' + outExt;
+          resolvedPath = (outDir ? outDir + sep : '') + baseName + '_subs.' + outExt;
         } else if (type === 'chapters') {
-          resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_chapters.json';
+          resolvedPath = (outDir ? outDir + sep : '') + baseName + '_chapters.json';
         } else if (type === 'frames') {
           const imgFormat = document.getElementById('extract-img-format').value;
           const imgMode = document.getElementById('extract-img-mode').value;
           if (imgMode === 'gif') {
-            resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_animated.gif';
+            resolvedPath = (outDir ? outDir + sep : '') + baseName + '_animated.gif';
           } else if (imgMode === 'interval') {
-            resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_frame_%04d.' + imgFormat;
+            resolvedPath = (outDir ? outDir + sep : '') + baseName + '_frame_%04d.' + imgFormat;
           } else {
-            resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_frame.' + imgFormat;
+            resolvedPath = (outDir ? outDir + sep : '') + baseName + '_frame.' + imgFormat;
           }
         }
       } else if (activeTabId === 'tab-merge') {
         const outFormat = ext || 'mkv';
-        resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_obsidian.' + outFormat;
+        resolvedPath = (outDir ? outDir + sep : '') + baseName + '_obsidian.' + outFormat;
       } else if (activeTabId === 'tab-grid') {
-        resolvedPath = (outDir ? outDir + '\\' : '') + baseName + '_grid.png';
+        resolvedPath = (outDir ? outDir + sep : '') + baseName + '_grid.png';
       }
     }
 
@@ -953,9 +964,10 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    const cleanedOutput = customOutputPath.value.trim().replace(/^["']+|["']+$/g, '').trim();
     const payload = {
       input_path: sourceFilePath,
-      output_path: customOutputPath.value.trim() || null
+      output_path: cleanedOutput || null
     };
 
     if (activeTab === 'tab-convert') {
